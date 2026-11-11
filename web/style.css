@@ -269,11 +269,25 @@ code { font-family: var(--mono); font-size: .92em; color: #4a4f57;
 .remote-flip.flipped { transform: rotateY(180deg); }
 .remote-flip.dragging { transition: none; }
 
-.remote { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
-  height: calc(100% - 28px); max-height: 730px; width: auto; display: block;
-  backface-visibility: hidden; -webkit-backface-visibility: hidden;
-  filter: drop-shadow(0 20px 26px rgba(15,17,20,.22)); }
-.remote.face-back { transform: translate(-50%, -50%) rotateY(180deg); }
+.remote { position: absolute; left: 50%; top: 50%;
+  transform: translate(-50%, -50%) translateZ(13px);
+  height: calc(100% - 40px); max-height: 720px; width: auto; display: block;
+  backface-visibility: hidden; -webkit-backface-visibility: hidden; }
+/* 投影放在舞台上，避免 filter 破坏 3D 侧面渲染 */
+.remote-stage::after { content: ''; position: absolute; left: 50%; bottom: 12px;
+  width: 46%; max-width: 190px; height: 26px; transform: translateX(-50%);
+  background: radial-gradient(ellipse at center, rgba(15,17,20,.24) 0%,
+    rgba(15,17,20,.06) 55%, rgba(15,17,20,0) 72%);
+  pointer-events: none; }
+.remote.face-back { transform: translate(-50%, -50%) rotateY(180deg) translateZ(13px); }
+
+/* 机身厚度：四个侧面，由 JS 按实际尺寸生成 */
+.remote-flip .edge { position: absolute; left: 50%; top: 50%;
+  pointer-events: none; border-radius: 24px;
+  background: linear-gradient(180deg, #dedeD9 0%, #b6b6af 48%, #94948d 100%); }
+.remote-flip .edge.top,
+.remote-flip .edge.bottom {
+  background: linear-gradient(90deg, #9d9d96 0%, #d2d2cc 42%, #b0b0a9 100%); }
 
 .flip-hint { position: absolute; left: 50%; bottom: 7px; transform: translateX(-50%);
   font-size: 10px; letter-spacing: .06em; color: var(--txt-3);
@@ -283,14 +297,19 @@ code { font-family: var(--mono); font-size: .92em; color: #4a4f57;
 .remote-stage:hover .flip-hint { opacity: 1; }
 
 /* 背面键盘按键 */
-.hot.kb .face { fill: #2b2b31; }
-.hot.kb .kbt { fill: #d8d8d4; font-family: var(--mono); text-anchor: middle;
-  dominant-baseline: central; pointer-events: none; }
+.hot.kb .face { fill: #33333b; stroke: #45454f; stroke-width: .7;
+  transition: fill .12s ease, stroke .12s ease; }
+.hot.kb .kbt { fill: #e6e6e1; font-family: var(--mono); text-anchor: middle;
+  dominant-baseline: central; pointer-events: none; font-weight: 500; }
+.hot.kb:hover .face { fill: #414150; }
 .hot.kb:hover .kbt { fill: #fff; }
-.hot.kb.on .face { fill: #4a4a55; }
-.hot.kb.sel .face { fill: #3c3c46; }
+.hot.kb.on .face { fill: #5a6a86; }
+.hot.kb.on .kbt { fill: #fff; }
+.hot.kb.sel .face { fill: #4a5870; stroke: #7d8ba3; stroke-width: 1.1; }
 .hot.kb.sel .kbt { fill: #fff; }
-.hot.kb.bound .face { fill: #2f3a44; }
+.hot.kb.bound .face { fill: #38424e; stroke: #55647a; }
+.hot.kb.off .face { fill: #26262c; stroke: #33333b; }
+.hot.kb.off .kbt { fill: #6b6b74; }
 
 .remote-extra { padding: 12px 16px 14px; display: grid; gap: 8px; }
 .re-label { font-size: 10px; letter-spacing: .08em; color: var(--txt-3); }

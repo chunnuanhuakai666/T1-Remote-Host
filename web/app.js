@@ -75,6 +75,8 @@ function goto(page) {
   $$('.nav-btn').forEach((b) => b.classList.toggle('active', b.dataset.page === page));
   $$('.page').forEach((p) => p.classList.toggle('active', p.id === 'page-' + page));
   if (history.replaceState) history.replaceState(null, '', '#' + page);
+  // 配置页隐藏时量不到尺寸，切过来之后再建机身侧面
+  if (page === 'cfg') setTimeout(buildThickness, 60);
 }
 $$('.nav-btn').forEach((b) => b.addEventListener('click', () => goto(b.dataset.page)));
 
@@ -294,20 +296,23 @@ function bindHots() {
 }
 
 /* 背面键盘：标准 HID 键盘的五行，旋转 90° 后竖排显示 */
+// 每项 [标签, VK, 占几个基础格]，长键（空格/回车/Shift/Caps）跨格
 const KB_ROWS = [
-  [['Esc', 0x1B], ['1', 0x31], ['2', 0x32], ['3', 0x33], ['4', 0x34], ['5', 0x35],
-   ['6', 0x36], ['7', 0x37], ['8', 0x38], ['9', 0x39], ['0', 0x30],
-   ['-', 0xBD], ['=', 0xBB], ['Back', 0x08]],
-  [['Tab', 0x09], ['Q', 0x51], ['W', 0x57], ['E', 0x45], ['R', 0x52], ['T', 0x54],
-   ['Y', 0x59], ['U', 0x55], ['I', 0x49], ['O', 0x4F], ['P', 0x50],
-   ['[', 0xDB], [']', 0xDD], ['\\', 0xDC]],
-  [['Caps', 0x14], ['A', 0x41], ['S', 0x53], ['D', 0x44], ['F', 0x46], ['G', 0x47],
-   ['H', 0x48], ['J', 0x4A], ['K', 0x4B], ['L', 0x4C], [';', 0xBA], ["'", 0xDE],
-   ['Enter', 0x0D]],
-  [['Shift', 0x10], ['Z', 0x5A], ['X', 0x58], ['C', 0x43], ['V', 0x56], ['B', 0x42],
-   ['N', 0x4E], ['M', 0x4D], [',', 0xBC], ['.', 0xBE], ['/', 0xBF], ['Shift', 0x10]],
-  [['Ctrl', 0x11], ['Win', 0x5B], ['Alt', 0x12], ['Space', 0x20], ['Fn', null],
-   ['←', 0x25], ['↑', 0x26], ['↓', 0x28], ['→', 0x27]],
+  // 第 1 列（最左）：功能键，空格最长
+  [['Ctrl', 0x11, 1], ['Fn', null, 1], ['-', 0xBD, 1], ['=', 0xBB, 1], ['Alt', 0x12, 1],
+   ['Space', 0x20, 4], ['Home', 0x24, 1], ['PgDn', 0x22, 1], ['End', 0x23, 1],
+   ['Win', 0x5B, 1]],
+  // 第 2 列：Shift 两格、Enter 三格
+  [['Shift', 0x10, 2], ['Z', 0x5A, 1], ['X', 0x58, 1], ['C', 0x43, 1], ['V', 0x56, 1],
+   ['B', 0x42, 1], ['N', 0x4E, 1], ['M', 0x4D, 1], ['←', 0x25, 1], ['Enter', 0x0D, 3]],
+  // 第 3 列：Caps 两格
+  [['Caps', 0x14, 2], ['A', 0x41, 1], ['S', 0x53, 1], ['D', 0x44, 1], ['F', 0x46, 1],
+   ['G', 0x47, 1], ['H', 0x48, 1], ['J', 0x4A, 1], ['K', 0x4B, 1], ['L', 0x4C, 1],
+   ['↑', 0x26, 1], ['Back', 0x08, 1]],
+  // 第 4 列（最右）：全单格
+  [['Esc', 0x1B, 1], ['`', 0xC0, 1], ['Q', 0x51, 1], ['W', 0x57, 1], ['E', 0x45, 1],
+   ['R', 0x52, 1], ['T', 0x54, 1], ['Y', 0x59, 1], ['U', 0x55, 1], ['I', 0x49, 1],
+   ['O', 0x4F, 1], ['P', 0x50, 1], ['Del', 0x2E, 1]],
 ];
 
 function buildBackFace() {
@@ -321,25 +326,56 @@ function buildBackFace() {
     return el;
   };
 
+  // 银色外壳 + 黑色键盘面板
+  const defs = mk('defs', {});
+  const grad = mk('linearGradient', {
+    id: 'backBody', x1: '0', y1: '0', x2: '0.75', y2: '1',
+  });
+  grad.appendChild(mk('stop', { offset: '0', 'stop-color': '#f7f7f3' }));
+  grad.appendChild(mk('stop', { offset: '0.45', 'stop-color': '#e6e6e0' }));
+  grad.appendChild(mk('stop', { offset: '1', 'stop-color': '#c4c4bd' }));
+  defs.appendChild(grad);
+  svg.appendChild(defs);
+
+  // 侧壁：整体右下偏移，露出深色边形成厚度
+  svg.appendChild(mk('rect', {
+    x: 5, y: 6, width: 192, height: 690, rx: 28, fill: '#b0b0a9',
+  }));
   // 机身
   svg.appendChild(mk('rect', {
-    x: 2, y: 2, width: 196, height: 696, rx: 26,
-    fill: '#efefec', stroke: '#d6d6d1', 'stroke-width': 1.5,
+    x: 2, y: 2, width: 192, height: 690, rx: 28,
+    fill: 'url(#backBody)', stroke: '#a8a8a1', 'stroke-width': 1.2,
   }));
+  // 内圈高光
   svg.appendChild(mk('rect', {
-    x: 13, y: 22, width: 174, height: 656, rx: 12,
-    fill: 'none', stroke: '#dedeD9', 'stroke-width': 1,
+    x: 5.5, y: 5.5, width: 185, height: 683, rx: 25,
+    fill: 'none', stroke: '#ffffff', 'stroke-opacity': 0.6, 'stroke-width': 1.4,
+  }));
+  // 黑色键盘面板
+  svg.appendChild(mk('rect', {
+    x: 14, y: 24, width: 172, height: 652, rx: 14,
+    fill: '#1a1a1e', stroke: '#08080a', 'stroke-width': 1.2,
+  }));
+  // 面板内阴影
+  svg.appendChild(mk('rect', {
+    x: 15.6, y: 25.6, width: 169, height: 649, rx: 12,
+    fill: 'none', stroke: '#000000', 'stroke-opacity': 0.42, 'stroke-width': 1,
   }));
 
-  const W = 32, H = 40, GAP = 4;
+  // 4 列 × 13 格，排满黑色面板
+  const W = 35, H = 45, GAP = 6, VGAP = 4;
   const cols = KB_ROWS.length;
   const x0 = (200 - (cols * W + (cols - 1) * GAP)) / 2;
-  const y0 = 30;
+  const y0 = 34;
 
-  KB_ROWS.forEach((row, ci) => {
+  KB_ROWS.forEach((column, ci) => {
     const x = x0 + ci * (W + GAP);
-    row.forEach(([label, vk], ri) => {
-      const y = y0 + ri * (H + GAP);
+    let y = y0;
+    column.forEach((item) => {
+      const label = item[0];
+      const vk = item[1];
+      const span = item[2] || 1;
+      const kh = span * H + (span - 1) * VGAP;
       const keyId = vk === null ? '' : 'K:0x' + vk.toString(16).toUpperCase().padStart(2, '0');
       const g = mk('g', {
         class: 'hot kb' + (keyId ? '' : ' off'),
@@ -347,11 +383,11 @@ function buildBackFace() {
         'data-name': label,
       });
       g.appendChild(mk('rect', {
-        class: 'face', x, y, width: W, height: H, rx: 7,
+        class: 'face', x: x, y: y, width: W, height: kh, rx: span > 1 ? 9 : 7,
       }));
       const t = mk('text', {
-        class: 'kbt', x: x + W / 2, y: y + H / 2,
-        'font-size': label.length > 2 ? 7.5 : (label.length > 1 ? 9.5 : 12),
+        class: 'kbt', x: x + W / 2, y: y + kh / 2,
+        'font-size': label.length > 2 ? 8 : (label.length > 1 ? 10 : 13),
       });
       t.textContent = label;
       g.appendChild(t);
@@ -359,6 +395,7 @@ function buildBackFace() {
       title.textContent = keyId ? label + '  ' + keyId : label + '（无上报码）';
       g.appendChild(title);
       svg.appendChild(g);
+      y += kh + VGAP;
     });
   });
 }
@@ -401,23 +438,80 @@ function initFlip() {
   stage.addEventListener('pointercancel', finish);
   stage.addEventListener('pointerleave', finish);
 
+  const hint = $('#flipHint');
+  const syncHint = () => {
+    if (!hint) return;
+    hint.textContent = flip.classList.contains('flipped')
+      ? '滑动或点击空白处 · 回到正面' : '滑动或点击空白处 · 背面键盘';
+  };
+
+  // 点击机身空白处翻转；点在按键上仍然只是选中该键
+  stage.addEventListener('click', (e) => {
+    if (flipDragMoved) { flipDragMoved = false; return; }
+    if (e.target.closest && e.target.closest('.hot')) return;
+    flip.classList.toggle('flipped');
+    syncHint();
+  });
+  stage.addEventListener('pointerup', syncHint);
+
   // 支持直接打开背面：地址栏加 #back
   if (location.hash === '#back') flip.classList.add('flipped');
+  syncHint();
+}
 
-  const hint = $('#flipHint');
-  if (hint) {
-    const sync = () => {
-      hint.textContent = flip.classList.contains('flipped')
-        ? '滑动翻转 · 回到正面' : '滑动翻转 · 背面键盘';
-    };
-    stage.addEventListener('pointerup', sync);
-    sync();
-  }
+/* 机身厚度：按 SVG 实际渲染尺寸生成四个侧面，翻转时能看到实体边缘 */
+const EDGE_DEPTH = 26; // 与 CSS 的 translateZ(13px) 一致：半深 × 2
+
+function buildThickness() {
+  const flip = $('#remoteFlip');
+  const front = flip && flip.querySelector('.face-front');
+  if (!flip || !front) return;
+  flip.querySelectorAll('.edge').forEach((n) => n.remove());
+
+  const rect = front.getBoundingClientRect();
+  const w = Math.round(rect.width);
+  const h = Math.round(rect.height);
+  if (w < 20 || h < 20) return;
+
+  // 银色机身占 viewBox 的 x 2..194（rx=28）/ y 2..692
+  const bw = w * 192 / 200;
+  const bh = h * 690 / 700;
+  const ox = -w * 2 / 200;
+  const oy = -h * 3 / 700;
+  const radius = 28 * w / 200;
+
+  const add = (cls, tw, th, rot, tz) => {
+    const el = document.createElement('div');
+    el.className = 'edge ' + cls;
+    el.style.width = tw + 'px';
+    el.style.height = th + 'px';
+    el.style.borderRadius = radius + 'px';
+    el.style.transform = 'translate(-50%,-50%) translate(' + ox + 'px,' + oy + 'px) '
+      + rot + ' translateZ(' + tz + 'px)';
+    flip.appendChild(el);
+  };
+  // 略微外推 1px，避免与正面边缘共面产生 z-fighting
+  add('left', EDGE_DEPTH, bh, 'rotateY(-90deg)', bw / 2 + 1);
+  add('right', EDGE_DEPTH, bh, 'rotateY(90deg)', bw / 2 + 1);
+  add('top', bw, EDGE_DEPTH, 'rotateX(90deg)', bh / 2 + 1);
+  add('bottom', bw, EDGE_DEPTH, 'rotateX(-90deg)', bh / 2 + 1);
 }
 
 buildBackFace();
 bindHots();
 initFlip();
+buildThickness();
+
+let edgeTimer = null;
+const scheduleEdges = () => {
+  clearTimeout(edgeTimer);
+  edgeTimer = setTimeout(buildThickness, 80);
+};
+window.addEventListener('resize', scheduleEdges);
+// 元素从隐藏变可见时尺寸才会出现，靠它兜底重建
+if (window.ResizeObserver) {
+  new ResizeObserver(scheduleEdges).observe($('#remoteFlip'));
+}
 
 function renderExtra() {
   const covered = new Set();
