@@ -17,3 +17,9 @@ recordings/*.log
 # 临时脚本
 _t*.bat
 _*.wav
+
+# PyInstaller 构建产物
+build/
+dist/
+*.spec
+_build*.log

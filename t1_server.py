@@ -29,15 +29,21 @@ from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import unquote, urlparse
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, BASE_DIR)
+# exe 下：资源在临时解压目录，可写数据在 exe 旁边
+if getattr(sys, "frozen", False):
+    RES_DIR = getattr(sys, "_MEIPASS", os.path.dirname(sys.executable))
+    BASE_DIR = os.path.dirname(sys.executable)
+else:
+    RES_DIR = os.path.dirname(os.path.abspath(__file__))
+    BASE_DIR = RES_DIR
+sys.path.insert(0, RES_DIR)
 
 import codec  # noqa: E402
 import keysynth  # noqa: E402
 from t1_gui import (BleWorker, CFG_DEFAULT, CFG_PATH, RawInputWatcher,  # noqa: E402
                     USAGE_NAME, VK_NAME, hx)
 
-WEB_DIR = os.path.join(BASE_DIR, "web")
+WEB_DIR = os.path.join(RES_DIR, "web")
 LOG_LIMIT = 600
 
 

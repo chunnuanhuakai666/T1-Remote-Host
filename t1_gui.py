@@ -85,7 +85,12 @@ def foreground_title():
 # ---------------------------------------------------------------- 常量
 
 APP_TITLE = "T1-Remote 上位机"
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+# 打包成 exe 后 __file__ 指向 PyInstaller 的临时解压目录，
+# 可写数据（配置/录音）必须落在 exe 旁边，否则每次重启都丢
+if getattr(sys, "frozen", False):
+    BASE_DIR = os.path.dirname(sys.executable)
+else:
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CFG_PATH = os.path.join(BASE_DIR, "t1_ui_config.json")
 
 TX_UUID = "ab5e0002-5a21-4f05-bc7d-af01f617b664"
