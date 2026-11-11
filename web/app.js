@@ -256,7 +256,8 @@ function playSeg(id, row) {
 }
 
 /* ------------------------------------------------------------------ 遥控器热区 */
-const REMOTE = $('.remote');
+const REMOTE = $('#remoteFlip') || $('.remote');
+let flipDragMoved = false;
 
 function hotEls() { return $$('.hot', REMOTE); }
 function hotKeys(el) {
@@ -275,16 +276,148 @@ function paintHot() {
   });
 }
 
-hotEls().forEach((el) => {
-  el.addEventListener('click', () => {
-    const keys = hotKeys(el);
-    if (!keys.length) {
-      toast('这个键没有上报 HID 事件，无法映射', 'warn', 3000);
-      return;
-    }
-    selectKey(keys[0]);
+function bindHots() {
+  $$('.hot', REMOTE).forEach((el) => {
+    if (el.dataset.bound === '1') return;
+    el.dataset.bound = '1';
+    el.addEventListener('click', () => {
+      // 拖拽翻转时松手不应当成点击
+      if (flipDragMoved) { flipDragMoved = false; return; }
+      const keys = hotKeys(el);
+      if (!keys.length) {
+        toast('这个键没有上报 HID 事件，无法映射', 'warn', 3000);
+        return;
+      }
+      selectKey(keys[0]);
+    });
   });
-});
+}
+
+/* 背面键盘：标准 HID 键盘的五行，旋转 90° 后竖排显示 */
+const KB_ROWS = [
+  [['Esc', 0x1B], ['1', 0x31], ['2', 0x32], ['3', 0x33], ['4', 0x34], ['5', 0x35],
+   ['6', 0x36], ['7', 0x37], ['8', 0x38], ['9', 0x39], ['0', 0x30],
+   ['-', 0xBD], ['=', 0xBB], ['Back', 0x08]],
+  [['Tab', 0x09], ['Q', 0x51], ['W', 0x57], ['E', 0x45], ['R', 0x52], ['T', 0x54],
+   ['Y', 0x59], ['U', 0x55], ['I', 0x49], ['O', 0x4F], ['P', 0x50],
+   ['[', 0xDB], [']', 0xDD], ['\\', 0xDC]],
+  [['Caps', 0x14], ['A', 0x41], ['S', 0x53], ['D', 0x44], ['F', 0x46], ['G', 0x47],
+   ['H', 0x48], ['J', 0x4A], ['K', 0x4B], ['L', 0x4C], [';', 0xBA], ["'", 0xDE],
+   ['Enter', 0x0D]],
+  [['Shift', 0x10], ['Z', 0x5A], ['X', 0x58], ['C', 0x43], ['V', 0x56], ['B', 0x42],
+   ['N', 0x4E], ['M', 0x4D], [',', 0xBC], ['.', 0xBE], ['/', 0xBF], ['Shift', 0x10]],
+  [['Ctrl', 0x11], ['Win', 0x5B], ['Alt', 0x12], ['Space', 0x20], ['Fn', null],
+   ['←', 0x25], ['↑', 0x26], ['↓', 0x28], ['→', 0x27]],
+];
+
+function buildBackFace() {
+  const svg = document.getElementById('remoteBack');
+  if (!svg || svg.dataset.built === '1') return;
+  svg.dataset.built = '1';
+  const NS = 'http://www.w3.org/2000/svg';
+  const mk = (tag, attrs) => {
+    const el = document.createElementNS(NS, tag);
+    Object.keys(attrs).forEach((k) => el.setAttribute(k, attrs[k]));
+    return el;
+  };
+
+  // 机身
+  svg.appendChild(mk('rect', {
+    x: 2, y: 2, width: 196, height: 696, rx: 26,
+    fill: '#efefec', stroke: '#d6d6d1', 'stroke-width': 1.5,
+  }));
+  svg.appendChild(mk('rect', {
+    x: 13, y: 22, width: 174, height: 656, rx: 12,
+    fill: 'none', stroke: '#dedeD9', 'stroke-width': 1,
+  }));
+
+  const W = 32, H = 40, GAP = 4;
+  const cols = KB_ROWS.length;
+  const x0 = (200 - (cols * W + (cols - 1) * GAP)) / 2;
+  const y0 = 30;
+
+  KB_ROWS.forEach((row, ci) => {
+    const x = x0 + ci * (W + GAP);
+    row.forEach(([label, vk], ri) => {
+      const y = y0 + ri * (H + GAP);
+      const keyId = vk === null ? '' : 'K:0x' + vk.toString(16).toUpperCase().padStart(2, '0');
+      const g = mk('g', {
+        class: 'hot kb' + (keyId ? '' : ' off'),
+        'data-keys': keyId,
+        'data-name': label,
+      });
+      g.appendChild(mk('rect', {
+        class: 'face', x, y, width: W, height: H, rx: 7,
+      }));
+      const t = mk('text', {
+        class: 'kbt', x: x + W / 2, y: y + H / 2,
+        'font-size': label.length > 2 ? 7.5 : (label.length > 1 ? 9.5 : 12),
+      });
+      t.textContent = label;
+      g.appendChild(t);
+      const title = mk('title', {});
+      title.textContent = keyId ? label + '  ' + keyId : label + '（无上报码）';
+      g.appendChild(title);
+      svg.appendChild(g);
+    });
+  });
+}
+
+/* 滑动 / 拖拽翻转 */
+function initFlip() {
+  const stage = $('.remote-stage');
+  const flip = $('#remoteFlip');
+  if (!stage || !flip) return;
+  let downX = 0, moved = false, dragging = false;
+
+  stage.addEventListener('pointerdown', (e) => {
+    downX = e.clientX;
+    moved = false;
+    flipDragMoved = false;
+    dragging = true;
+    flip.classList.add('dragging');
+  });
+
+  stage.addEventListener('pointermove', (e) => {
+    if (!dragging) return;
+    const dx = e.clientX - downX;
+    if (!moved && Math.abs(dx) > 6) moved = true;
+    if (!moved) return;
+    const base = flip.classList.contains('flipped') ? 180 : 0;
+    const ang = base + Math.max(-180, Math.min(180, dx * 0.55));
+    flip.style.transform = 'rotateY(' + ang + 'deg)';
+  });
+
+  const finish = (e) => {
+    if (!dragging) return;
+    dragging = false;
+    flip.classList.remove('dragging');
+    flip.style.transform = '';
+    const dx = (e.clientX || 0) - downX;
+    if (moved && Math.abs(dx) > 45) flip.classList.toggle('flipped');
+    flipDragMoved = moved;
+  };
+  stage.addEventListener('pointerup', finish);
+  stage.addEventListener('pointercancel', finish);
+  stage.addEventListener('pointerleave', finish);
+
+  // 支持直接打开背面：地址栏加 #back
+  if (location.hash === '#back') flip.classList.add('flipped');
+
+  const hint = $('#flipHint');
+  if (hint) {
+    const sync = () => {
+      hint.textContent = flip.classList.contains('flipped')
+        ? '滑动翻转 · 回到正面' : '滑动翻转 · 背面键盘';
+    };
+    stage.addEventListener('pointerup', sync);
+    sync();
+  }
+}
+
+buildBackFace();
+bindHots();
+initFlip();
 
 function renderExtra() {
   const covered = new Set();

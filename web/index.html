@@ -188,7 +188,8 @@
         <div class="map-grid">
           <div class="card remote-card">
             <div class="remote-stage">
-              <svg class="remote" viewBox="0 0 200 700" aria-label="T1-Remote 按键图">
+              <div class="remote-flip" id="remoteFlip">
+              <svg class="remote face-front" viewBox="0 0 200 700" aria-label="T1-Remote 按键图">
                 <defs>
                   <linearGradient id="bodyG" x1=".1" y1="0" x2=".9" y2="1">
                     <stop offset="0" stop-color="#2E2E33"/>
@@ -299,6 +300,10 @@
                   <path class="glyph" d="M136 406h12M136 410h12M136 414h12"/>
                 </g>
               </svg>
+              <svg class="remote face-back" id="remoteBack" viewBox="0 0 200 700"
+                   aria-label="T1-Remote 背面键盘"></svg>
+              </div>
+              <div class="flip-hint" id="flipHint">滑动翻转 · 背面键盘</div>
             </div>
 
             <div class="remote-extra">
