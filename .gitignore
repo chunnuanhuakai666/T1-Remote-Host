@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# 录音与临时产物（含个人语音内容，不要上传）
+recordings/*.wav
+recordings/*.adpcm
+recordings/*.log
+*.log
+
+# 浏览器调试配置（Edge 用户数据，体积大且含本机信息）
+.browser_profile/
+
+# 临时脚本
+_t*.bat
+_*.wav

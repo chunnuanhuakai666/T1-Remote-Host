@@ -1,0 +1,495 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>T1-Remote · 上位机</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<div class="app">
+  <!-- ==================== 侧栏 ==================== -->
+  <aside class="rail">
+    <div class="brand" title="T1-Remote 上位机">
+      <svg viewBox="0 0 24 24" width="21" height="21" aria-hidden="true">
+        <path d="M3.5 12h2.2l1.6-4.6 2.4 9.2 2-6.4 1.5 3.2h2.3"/>
+        <path d="M18.4 9.2v5.6"/>
+      </svg>
+    </div>
+
+    <nav class="nav">
+      <button class="nav-btn active" data-page="rec" title="录音">
+        <svg viewBox="0 0 24 24"><rect x="9" y="2.6" width="6" height="11" rx="3"/><path d="M5.6 11.4a6.4 6.4 0 0 0 12.8 0M12 17.8v3.4"/></svg>
+        <em>录音</em>
+      </button>
+      <button class="nav-btn" data-page="keys" title="按键">
+        <svg viewBox="0 0 24 24"><rect x="3" y="4.6" width="18" height="14.8" rx="3"/><path d="M7 9h.01M11 9h.01M15 9h.01M7 12.6h.01M11 12.6h6M8 16.2h8"/></svg>
+        <em>按键</em>
+      </button>
+      <button class="nav-btn" data-page="cfg" title="配置">
+        <svg viewBox="0 0 24 24"><rect x="7.4" y="2.6" width="9.2" height="18.8" rx="3.4"/><circle cx="12" cy="8.6" r="2.1"/><path d="M12 14v3.6"/></svg>
+        <em>配置</em>
+      </button>
+      <button class="nav-btn" data-page="log" title="日志">
+        <svg viewBox="0 0 24 24"><path d="M4 6h16M4 10.4h10M4 14.8h13M4 19.2h7"/></svg>
+        <em>日志</em>
+      </button>
+    </nav>
+
+    <div class="rail-foot">
+      <button class="nav-btn nav-mini" data-page="set" title="设置">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.1"/><path d="M12 2.8v2.4M12 18.8v2.4M4.5 7.6l2.1 1.2M17.4 15.2l2.1 1.2M4.5 16.4l2.1-1.2M17.4 8.8l2.1-1.2"/></svg>
+      </button>
+      <div class="hid-dot" id="hidDot" title="Raw Input 监听"></div>
+      <span class="rail-hid" id="hidTxt">监听</span>
+    </div>
+  </aside>
+
+  <!-- ==================== 主体 ==================== -->
+  <main class="main">
+    <header class="topbar">
+      <div class="title">
+        <h1>T1-Remote</h1>
+        <p>ATVV 语音采集 · 按键映射</p>
+      </div>
+
+      <div class="topbar-right">
+        <div class="dev-chip" id="devChip">
+          <span class="pulse" id="devPulse"></span>
+          <div class="dev-lines">
+            <b id="devState">未连接</b>
+            <span id="devMac">——</span>
+          </div>
+        </div>
+
+        <div class="battery" id="battery" title="电量">
+          <svg viewBox="0 0 24 24" width="18" height="18" class="bat-ico">
+            <rect x="2.5" y="7.5" width="16" height="9" rx="2.4"/>
+            <path d="M20.6 10.6v2.8"/>
+            <rect x="4.8" y="9.8" width="6" height="4.4" rx="1" class="bfill" id="bfill"/>
+          </svg>
+          <span id="batteryTxt">—</span>
+        </div>
+
+        <button class="btn primary" id="btnConnect">连接</button>
+        <button class="btn ghost icon" id="btnCaps" title="重新协商能力">
+          <svg viewBox="0 0 24 24"><path d="M19.6 11a7.6 7.6 0 1 0-2.2 5.4M19.6 5.4v5.8h-5.8"/></svg>
+        </button>
+      </div>
+    </header>
+
+    <div class="pages">
+      <!-- ============ 录音 ============ -->
+      <section class="page active" id="page-rec">
+        <div class="stats">
+          <div class="stat"><label>音轨</label><b id="stSegs">0</b><i>段</i></div>
+          <div class="stat"><label>累计时长</label><b id="stDur">0.0</b><i>s</i></div>
+          <div class="stat"><label>实时帧率</label><b id="stFps">0</b><i>fps</i></div>
+          <div class="stat"><label>累计数据</label><b id="stKb">0</b><i>KB</i></div>
+        </div>
+
+        <div class="rec-grid">
+          <div class="card stage">
+            <div class="card-head">
+              <h2>实时声波</h2>
+              <div class="chips">
+                <span class="tag" id="tagState">待机</span>
+                <span class="tag mono" id="tagRate">16 kHz · ADPCM</span>
+              </div>
+            </div>
+            <div class="stage-body">
+              <canvas id="orb" width="520" height="520"></canvas>
+              <div class="orb-meta">
+                <b id="liveDur">0.00</b>
+                <span>本段时长 / s</span>
+              </div>
+              <canvas id="wave" width="1600" height="360"></canvas>
+            </div>
+            <div class="stage-foot">
+              <div class="kv"><label>帧数</label><b id="liveFrames">0</b></div>
+              <div class="kv"><label>电平</label>
+                <div class="levelbar"><i id="levelFill"></i></div>
+              </div>
+              <div class="kv"><label>最后按键</label><b id="lastKey">—</b></div>
+            </div>
+          </div>
+
+          <div class="card side">
+            <div class="card-head"><h2>会话</h2></div>
+            <div class="info-list" id="infoList">
+              <div class="info-row"><label>厂商</label><b>—</b></div>
+              <div class="info-row"><label>型号</label><b>—</b></div>
+              <div class="info-row"><label>固件</label><b>—</b></div>
+            </div>
+            <div class="divider"></div>
+            <div class="info-list" id="capsList">
+              <div class="info-row"><label>协议版本</label><b>—</b></div>
+              <div class="info-row"><label>编码</label><b>—</b></div>
+              <div class="info-row"><label>交互模型</label><b>—</b></div>
+              <div class="info-row"><label>帧长</label><b>—</b></div>
+            </div>
+            <p class="hint">按住语音键说话，松开自动成段。开麦由主机下发 <code>MIC_OPEN</code>，每 2 s 用 <code>MIC_EXTEND</code> 续期。</p>
+          </div>
+        </div>
+
+        <div class="card tracks">
+          <div class="card-head">
+            <h2>音轨</h2>
+            <div class="head-actions">
+              <button class="btn ghost sm" id="btnOutdir">打开目录</button>
+              <button class="btn ghost sm" id="btnSaveAll">全部保存</button>
+            </div>
+          </div>
+          <div class="track-list" id="trackList">
+            <div class="empty">还没有音轨 — 按住遥控器语音键说一句话试试</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ 按键列表 ============ -->
+      <section class="page" id="page-keys">
+        <div class="page-head">
+          <div>
+            <h2>全部按键</h2>
+            <p>点任意一张卡片进入图形化配置</p>
+          </div>
+          <div class="page-tools">
+            <div class="segmented" id="keyFilter">
+              <button class="active" data-f="all">全部</button>
+              <button data-f="K">键盘集合</button>
+              <button data-f="C">Consumer</button>
+              <button data-f="bound">已绑动作</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="key-grid" id="keyGrid"></div>
+
+        <p class="foot-hint">
+          键盘集合 <code>K:0x..</code> 走 Raw Input；Consumer 集合 <code>C:0x....</code> 走 RID 0x02。
+          按一下实体键，对应卡片会自动出现。
+        </p>
+      </section>
+
+      <!-- ============ 配置（图形化） ============ -->
+      <section class="page" id="page-cfg">
+        <div class="page-head">
+          <div>
+            <h2>配置</h2>
+            <p>点一下遥控器上的按键，右侧直接改名称与动作</p>
+          </div>
+          <div class="page-tools">
+            <span class="live-key" id="liveKey">按一下遥控器任意键…</span>
+            <button class="btn ghost sm" id="btnKeyReset">恢复默认</button>
+          </div>
+        </div>
+
+        <div class="map-grid">
+          <div class="card remote-card">
+            <div class="remote-stage">
+              <svg class="remote" viewBox="0 0 200 700" aria-label="T1-Remote 按键图">
+                <defs>
+                  <linearGradient id="bodyG" x1=".1" y1="0" x2=".9" y2="1">
+                    <stop offset="0" stop-color="#2E2E33"/>
+                    <stop offset=".38" stop-color="#1B1B1F"/>
+                    <stop offset="1" stop-color="#0D0D10"/>
+                  </linearGradient>
+                  <linearGradient id="sheenG" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0" stop-color="#fff" stop-opacity=".085"/>
+                    <stop offset=".28" stop-color="#fff" stop-opacity=".012"/>
+                    <stop offset="1" stop-color="#fff" stop-opacity="0"/>
+                  </linearGradient>
+                </defs>
+
+                <!-- 机身 -->
+                <rect x="18" y="8" width="164" height="644" rx="30" fill="url(#bodyG)"/>
+                <rect x="18" y="8" width="164" height="644" rx="30" fill="url(#sheenG)"/>
+                <rect x="18.6" y="8.6" width="162.8" height="642.8" rx="29.4"
+                      fill="none" stroke="#fff" stroke-opacity=".075"/>
+
+                <!-- 拾音孔 -->
+                <rect x="58" y="24" width="22" height="2.6" rx="1.3" fill="#fff" fill-opacity=".2"/>
+
+                <!-- 电源（未捕获 HID 事件） -->
+                <g class="hot off" data-keys="" data-name="电源">
+                  <title>电源 · 未捕获到上报</title>
+                  <circle class="face" cx="156" cy="40" r="16"/>
+                  <circle class="ring" cx="156" cy="40" r="16"/>
+                  <path class="glyph" d="M156.2 30.8v7.4"/>
+                  <path class="glyph" d="M151.6 33.6a7.2 7.2 0 1 0 9.2 0"/>
+                </g>
+
+                <!-- 方向键 -->
+                <g class="dpad">
+                  <circle cx="100" cy="120" r="76" fill="#1B1B1E"/>
+                  <circle cx="100" cy="120" r="76" fill="none" stroke="#fff" stroke-opacity=".075"/>
+
+                  <g class="hot" data-keys="K:0x26" data-name="上">
+                    <title>上</title>
+                    <path class="face wedge" d="M41.8 71.1A76 76 0 0 1 158.2 71.1L132.2 93A42 42 0 0 0 67.8 93Z"/>
+                    <path class="glyph arrow" d="M93.6 68 100 61.6 106.4 68"/>
+                  </g>
+                  <g class="hot" data-keys="K:0x28" data-name="下">
+                    <title>下</title>
+                    <path class="face wedge" d="M158.2 168.9A76 76 0 0 1 41.8 168.9L67.8 147A42 42 0 0 0 132.2 147Z"/>
+                    <path class="glyph arrow" d="M93.6 172 100 178.4 106.4 172"/>
+                  </g>
+                  <g class="hot" data-keys="K:0x25" data-name="左">
+                    <title>左</title>
+                    <path class="face wedge" d="M41.8 168.9A76 76 0 0 1 41.8 71.1L67.8 93A42 42 0 0 0 67.8 147Z"/>
+                    <path class="glyph arrow" d="M46 113.6 39.6 120 46 126.4"/>
+                  </g>
+                  <g class="hot" data-keys="K:0x27" data-name="右">
+                    <title>右</title>
+                    <path class="face wedge" d="M158.2 71.1A76 76 0 0 1 158.2 168.9L132.2 147A42 42 0 0 0 132.2 93Z"/>
+                    <path class="glyph arrow" d="M154 113.6 160.4 120 154 126.4"/>
+                  </g>
+
+                  <g class="hot ok" data-keys="K:0x0D" data-name="OK / 确认">
+                    <title>OK / 确认</title>
+                    <circle class="face inset" cx="100" cy="120" r="41"/>
+                    <circle class="ring" cx="100" cy="120" r="41"/>
+                  </g>
+                </g>
+
+                <!-- 返回 / 语音 -->
+                <g class="hot" data-keys="C:0x0224" data-name="返回">
+                  <title>返回</title>
+                  <circle class="face" cx="63" cy="260" r="22"/>
+                  <circle class="ring" cx="63" cy="260" r="22"/>
+                  <path class="glyph" d="M68.6 260h-11.2M61.4 256l-4 4 4 4"/>
+                </g>
+
+                <g class="hot" data-keys="C:0x0221" data-name="语音">
+                  <title>语音</title>
+                  <circle class="face" cx="142" cy="260" r="22"/>
+                  <circle class="ring" cx="142" cy="260" r="22"/>
+                  <circle cx="136.4" cy="260" r="1.5" fill="#fff" fill-opacity=".62"/>
+                  <circle cx="142" cy="260" r="1.5" fill="#fff" fill-opacity=".62"/>
+                  <circle cx="147.6" cy="260" r="1.5" fill="#fff" fill-opacity=".62"/>
+                </g>
+
+                <!-- 音量摇杆（一体式，上报 3 个码） -->
+                <g class="hot" data-keys="C:0x00E9,C:0x00EA,C:0x00E2" data-name="音量">
+                  <title>音量 + / − / 静音</title>
+                  <rect class="face" x="36" y="312" width="52" height="128" rx="26"/>
+                  <rect class="ring" x="36" y="312" width="52" height="128" rx="26"/>
+                  <path d="M40.5 376h43" stroke="#fff" stroke-opacity=".07"/>
+                  <path class="glyph" d="M55.4 340.6h3.4l4.4-3.7v14.2l-4.4-3.7h-3.4z"/>
+                  <path class="glyph" d="m66.6 341.6 5 5M71.6 341.6l-5 5"/>
+                  <path class="glyph" d="M55.4 404.6h3.4l4.4-3.7v14.2l-4.4-3.7h-3.4z"/>
+                  <path class="glyph" d="M67 405a4.2 4.2 0 0 1 0 7.2"/>
+                  <path class="glyph" d="M70.2 402.2a8 8 0 0 1 0 12.8"/>
+                </g>
+
+                <!-- 主页 / 菜单 -->
+                <g class="hot" data-keys="C:0x0223" data-name="主页">
+                  <title>主页</title>
+                  <circle class="face" cx="142" cy="330" r="22"/>
+                  <circle class="ring" cx="142" cy="330" r="22"/>
+                  <path class="glyph" d="M135.6 331.4v7.4h12.8v-7.4"/>
+                  <path class="glyph" d="m134.2 331.2 7.8-6.6 7.8 6.6"/>
+                </g>
+
+                <g class="hot" data-keys="K:0x5D" data-name="菜单">
+                  <title>菜单</title>
+                  <circle class="face" cx="142" cy="410" r="22"/>
+                  <circle class="ring" cx="142" cy="410" r="22"/>
+                  <path class="glyph" d="M136 406h12M136 410h12M136 414h12"/>
+                </g>
+              </svg>
+            </div>
+
+            <div class="remote-extra">
+              <span class="re-label">其他上报码</span>
+              <div class="chips" id="extraChips"></div>
+            </div>
+          </div>
+
+          <div class="card editor">
+            <div class="ed-empty" id="edEmpty">
+              <svg viewBox="0 0 24 24" width="26" height="26"><circle cx="12" cy="12" r="9"/><path d="M12 8.2v4.4l3 1.8"/></svg>
+              <p>在左侧遥控器上点选一个按键</p>
+              <span>选中的按键会显示名称、动作与触发统计</span>
+              <div class="empty-chips" id="emptyChips"></div>
+            </div>
+
+            <div class="ed-body" id="edBody" hidden>
+              <div class="ed-head">
+                <div class="ed-tit">
+                  <span class="mono ed-id" id="edId">K:0x26</span>
+                  <h3 id="edName">上</h3>
+                </div>
+                <span class="ed-chan" id="edChan">键盘集合 COL01</span>
+              </div>
+
+              <div class="ed-chips" id="edChips" hidden></div>
+
+              <div class="ed-fields">
+                <div class="field">
+                  <label>名称</label>
+                  <input class="inp" id="edLabel" placeholder="显示在卡片与日志里">
+                </div>
+                <div class="field">
+                  <label>动作</label>
+                  <input class="inp mono" id="edAction" placeholder="key:ctrl+alt+p">
+                </div>
+                <p class="parse" id="edParse">解析：无动作（仅记录）</p>
+              </div>
+
+              <div class="field">
+                <label>预设</label>
+                <div class="presets" id="edPresets"></div>
+              </div>
+
+              <div class="ed-tip">
+                <b>动作语法</b>
+                <span><code>key:ctrl+alt+p</code> 合成按键 · <code>text:你好</code> 键入文本</span>
+                <span><code>open:notepad</code> 打开程序 · <code>cmd:shutdown /s</code> 执行命令</span>
+              </div>
+
+              <div class="ed-foot">
+                <span class="ed-count">触发 <b id="edCount">0</b> 次</span>
+                <button class="btn ghost sm" id="edDel">删除</button>
+                <div class="grow"></div>
+                <button class="btn ghost sm" id="edTest">试运行</button>
+                <button class="btn primary sm" id="edSave">保存</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ 设置 ============ -->
+      <section class="page" id="page-set">
+        <div class="page-head">
+          <div>
+            <h2>设置</h2>
+            <p>连接、音频解码与动作权限</p>
+          </div>
+        </div>
+
+        <div class="set-grid">
+          <div class="card cfg-card">
+            <div class="card-head"><h2>连接</h2></div>
+            <div class="field">
+              <div class="f-label"><label>设备地址</label><span>BLE MAC，留空则只按名称连接</span></div>
+              <input class="inp mono" data-cfg="mac" placeholder="AA:BB:CC:DD:EE:FF">
+            </div>
+            <div class="field">
+              <div class="f-label"><label>设备名称</label><span>MAC 连不上时按名称查找（模糊匹配）</span></div>
+              <input class="inp" data-cfg="name" placeholder="T1">
+            </div>
+            <div class="field">
+              <div class="f-label"><label>输出目录</label><span>WAV / ADPCM 落盘位置</span></div>
+              <div class="inp-row">
+                <input class="inp mono" data-cfg="outdir">
+                <button class="btn ghost sm" id="btnPickDir">选择</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="card cfg-card">
+            <div class="card-head"><h2>行为</h2></div>
+            <div class="switch-row">
+              <div class="f-label"><label>收到语音键立即开麦</label><span>关闭后需手动下发 MIC_OPEN</span></div>
+              <button class="switch" data-bool="auto_mic_open"></button>
+            </div>
+            <div class="switch-row">
+              <div class="f-label"><label>松开语音键自动键入</label><span>识别成文字，输入到当前焦点对话框</span></div>
+              <button class="switch" data-bool="voice_input"></button>
+            </div>
+            <div class="switch-row">
+              <div class="f-label"><label>结束自动保存 WAV</label><span>每段落盘到输出目录</span></div>
+              <button class="switch" data-bool="auto_save"></button>
+            </div>
+            <div class="switch-row">
+              <div class="f-label"><label>导出归一化峰值</label><span>把音量拉满到 -1.4 dBFS</span></div>
+              <button class="switch" data-bool="normalize"></button>
+            </div>
+            <div class="switch-row">
+              <div class="f-label"><label>启动时开启按键学习</label><span>Raw Input 旁路监听</span></div>
+              <button class="switch" data-bool="hid_listen"></button>
+            </div>
+          </div>
+
+          <div class="card cfg-card">
+            <div class="card-head"><h2>音频</h2></div>
+            <div class="slider-row">
+              <div class="f-label"><label>段首跳过字节</label><span>每段开头 0x77 填充长度</span></div>
+              <div class="slider-box">
+                <input type="range" data-num="skip_bytes" min="0" max="8" step="1">
+                <b class="num" id="v_skip_bytes">4 B</b>
+              </div>
+            </div>
+            <div class="slider-row">
+              <div class="f-label"><label>高通截止</label><span>去除 ADPCM 直流漂移</span></div>
+              <div class="slider-box">
+                <input type="range" data-num="hpf_hz" min="0" max="400" step="10">
+                <b class="num" id="v_hpf_hz">120 Hz</b>
+              </div>
+            </div>
+            <div class="slider-row">
+              <div class="f-label"><label>MIC_EXTEND 周期</label><span>按住期间续期，防 3 s 超时</span></div>
+              <div class="slider-box">
+                <input type="range" data-num="mic_extend_ms" min="500" max="5000" step="100">
+                <b class="num" id="v_mic_extend_ms">2000 ms</b>
+              </div>
+            </div>
+            <div class="slider-row">
+              <div class="f-label"><label>单段最长保护</label><span>到点自动 MIC_CLOSE</span></div>
+              <div class="slider-box">
+                <input type="range" data-num="max_segment_s" min="5" max="120" step="5">
+                <b class="num" id="v_max_segment_s">30 s</b>
+              </div>
+            </div>
+          </div>
+
+          <div class="card cfg-card">
+            <div class="card-head"><h2>动作权限</h2></div>
+            <div class="switch-row">
+              <div class="f-label"><label>允许合成按键 / 键入</label><span>启用 <code>key:</code> 与 <code>text:</code> 动作</span></div>
+              <button class="switch" data-bool="run_key"></button>
+            </div>
+            <div class="switch-row">
+              <div class="f-label"><label>允许执行命令</label><span>启用 <code>cmd:</code> 与 <code>open:</code>，默认关闭</span></div>
+              <button class="switch" data-bool="run_cmd"></button>
+            </div>
+            <p class="hint">合成事件带 <code>0x54314B59</code> 标记，Raw Input 会丢弃，不会自激回环。</p>
+            <div class="card-foot">
+              <button class="btn ghost sm" id="btnOpenCfg">打开配置文件</button>
+              <button class="btn ghost sm" id="btnResetCfg">恢复默认</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ 日志 ============ -->
+      <section class="page" id="page-log">
+        <div class="card logs">
+          <div class="card-head">
+            <h2>运行日志</h2>
+            <div class="head-actions">
+              <div class="segmented sm" id="logFilter">
+                <button class="active" data-l="all">全部</button>
+                <button data-l="info">信息</button>
+                <button data-l="mut">协议</button>
+                <button data-l="warn">警告</button>
+                <button data-l="err">错误</button>
+              </div>
+              <button class="btn ghost sm" id="btnClearLog">清空</button>
+            </div>
+          </div>
+          <div class="log-body" id="logBody"></div>
+        </div>
+      </section>
+    </div>
+  </main>
+</div>
+
+<div class="toasts" id="toasts"></div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

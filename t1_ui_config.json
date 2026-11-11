@@ -1,0 +1,63 @@
+{
+  "mac": "",
+  "name": "T1",
+  "outdir": "recordings",
+  "auto_save": true,
+  "skip_bytes": 4,
+  "hpf_hz": 120.0,
+  "normalize": true,
+  "auto_mic_open": true,
+  "mic_extend_ms": 2000,
+  "max_segment_s": 30,
+  "voice_input": true,
+  "wave_frames": 320,
+  "hid_listen": true,
+  "run_key": true,
+  "run_cmd": false,
+  "keymap": {
+    "C:0x0221": {
+      "label": "语音键",
+      "action": ""
+    },
+    "C:0x0223": {
+      "label": "主页",
+      "action": ""
+    },
+    "C:0x0224": {
+      "label": "返回",
+      "action": ""
+    },
+    "C:0x00E9": {
+      "label": "音量+",
+      "action": ""
+    },
+    "C:0x00EA": {
+      "label": "音量−",
+      "action": ""
+    },
+    "C:0x00E2": {
+      "label": "静音",
+      "action": ""
+    },
+    "K:0x26": {
+      "label": "上 ↑",
+      "action": ""
+    },
+    "K:0x28": {
+      "label": "下 ↓",
+      "action": "key:voldown"
+    },
+    "K:0x25": {
+      "label": "左 ←",
+      "action": ""
+    },
+    "K:0x27": {
+      "label": "右 →",
+      "action": ""
+    },
+    "K:0x0D": {
+      "label": "OK / 确认",
+      "action": ""
+    }
+  }
+}
