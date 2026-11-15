@@ -319,8 +319,8 @@ ctranslate2.dll 若在 bleak 的 WinRT backend 之后加载，初始化模型时
 
 1. 装 Python 3.8+（建议 3.12），然后 `python -m pip install -r requirements.txt`
 2. 语音识别默认用本地 SenseVoice（sherpa-onnx，中文专用），首次识别会自动下载模型到
-   `models/`，之后完全离线；不可用时依次退回 faster-whisper、Windows 内置听写
-   （后者准确率明显更低）
+   `models/`，之后完全离线；不可用时依次退回 faster-whisper（需另装，见 requirements.txt
+   末尾注释）、Windows 内置听写（后者准确率明显更低）
 3. 删掉 `.browser_profile/`，它存的是 Edge 用户数据，和本机路径绑定，删了会自动重建
 4. 遥控器在系统蓝牙里重新配对；配置里把 `mac` 留空、`name` 填设备名即可自动查找
 
