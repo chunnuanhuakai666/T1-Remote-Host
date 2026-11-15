@@ -18,6 +18,7 @@
 
 import os
 import re
+import sys
 import threading
 import time
 import wave
@@ -28,6 +29,10 @@ os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
 os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+if getattr(sys, "frozen", False):
+    # 打包后 stt.py 在 PYZ 里，__file__ 指向 _internal；
+    # 模型目录要跟 exe 同级，用户把 models/ 放在 exe 旁边就能用。
+    BASE_DIR = os.path.dirname(sys.executable)
 MODEL_DIR = os.path.join(BASE_DIR, "models")
 SAMPLE_RATE = 16000
 
@@ -85,6 +90,15 @@ def _has_sherpa():
 def _has_sensevoice_files():
     return (os.path.isfile(os.path.join(_sv_dir, "model.int8.onnx"))
             and os.path.isfile(os.path.join(_sv_dir, "tokens.txt")))
+
+
+def sensevoice_dir():
+    """SenseVoice 模型期望所在目录（打包后就是 exe 同级 models/sense-voice）"""
+    return _sv_dir
+
+
+def have_sensevoice_files():
+    return _has_sensevoice_files()
 
 
 HAVE_WHISPER = _has_whisper()

@@ -314,6 +314,13 @@ def handle_event(kind, ev):
 
     if kind == "rawkey":
         key_id = ev.get("key_id")
+        # 能收到按键说明遥控器刚被唤醒：若 BLE 正在后台重连，催它立刻试一次，
+        # 把「按键唤醒 → 接回」的等待从几秒压到一两秒
+        if S.ble and S.ble.is_alive() and not getattr(S.ble, "connected", False):
+            try:
+                S.ble.poke()
+            except Exception:
+                pass
         # Raw Input 和 BLE 报告直读可能同时上报同一次按下，150ms 内只算一次
         now = time.time()
         if key_id and key_id == S.key_sig and now - S.key_sig_t < 0.15:
@@ -408,8 +415,27 @@ def run_action(act, key_id=""):
 # ---------------------------------------------------------------- 设备控制
 
 def connect_ble():
-    if S.ble and S.ble.is_alive():
-        S.log("已经连接中", "warn")
+    ble = S.ble
+    if ble and ble.is_alive():
+        if getattr(ble, "stopping", False):
+            # 旧线程正在收尾（可能卡在一次连接超时里，最多十几秒）：
+            # 直接新建会把「谁在用这个遥控器」搞乱，等它退了再重开。
+            S.log("正在结束上一次连接，随后自动重连…", "warn")
+
+            def _restart():
+                ble.join(25)
+                connect_ble()
+            threading.Thread(target=_restart, daemon=True, name="ble-restart").start()
+            return
+        if ble.connected:
+            S.log("已经连接中", "warn")
+        else:
+            # 正在后台重连：别新建线程，直接催它立刻试一次
+            try:
+                ble.poke()
+            except Exception:
+                pass
+            S.log("立即重连…")
         return
     S.ble = BleWorker(S.q, S.cfg)
     S.ble.pause_actions = S.pause_actions   # 沿用当前的暂停状态
@@ -419,7 +445,23 @@ def connect_ble():
 def disconnect_ble():
     if S.ble:
         S.ble.stop()
-        S.log("正在断开…", "mut")
+        S.log("正在断开…（已停止自动重连，重新连接请点「连接」）", "mut")
+
+
+def set_pause(on):
+    """暂停/恢复动作执行。HTTP 接口与托盘菜单共用。"""
+    on = bool(on)
+    if on == S.pause_actions:
+        return
+    S.pause_actions = on
+    if S.ble:
+        try:
+            S.ble.pause_actions = on
+        except Exception:
+            pass
+    S.log("已暂停动作执行（按键仅记录，不合成）" if on
+          else "已恢复动作执行", "warn" if on else "ok")
+    S.broadcast({"t": "pause", "on": on})
 
 
 def start_hid():
@@ -836,17 +878,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"ok": True})
 
         if p == "/api/pause":
-            on = bool(b.get("on"))
-            if on != S.pause_actions:
-                S.pause_actions = on
-                if S.ble:
-                    try:
-                        S.ble.pause_actions = on
-                    except Exception:
-                        pass
-                S.log("已暂停动作执行（按键仅记录，不合成）" if on
-                      else "已恢复动作执行", "warn" if on else "ok")
-                S.broadcast({"t": "pause", "on": on})
+            set_pause(b.get("on"))
             return self._json({"ok": True, "pause": S.pause_actions})
 
         if p == "/api/logs/clear":
@@ -910,6 +942,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=0)
     ap.add_argument("--no-browser", action="store_true")
+    ap.add_argument("--tray", action="store_true",
+                    help="托盘模式：无窗口常驻桌面右下角，左键打开界面")
     args = ap.parse_args()
 
     port = args.port or pick_port()
@@ -933,6 +967,21 @@ def main():
                 S.log("Interception 不可用，按键只走 Raw Input（映射会与原功能同时触发）", "warn")
         threading.Thread(target=_boot_keys, daemon=True).start()
 
+    # 开机自动连接：遥控器空闲会休眠断链，BleWorker 内部会一直后台重试，
+    # 用户按任意键唤醒设备后几秒内自动接回，不需要每次点「连接」。
+    if S.cfg.get("auto_connect", True) and (S.cfg.get("mac") or S.cfg.get("name")):
+        def _boot_ble():
+            time.sleep(2.5)      # 等 HTTP 与蓝牙栈就绪，太急会连不上
+            if S.ble and S.ble.is_alive():
+                return
+            S.log("自动连接：正在连%s…" % (" " + S.cfg["mac"]
+                                        if S.cfg.get("mac") else
+                                        "按名称「%s」找设备" % S.cfg.get("name")))
+            connect_ble()
+        threading.Thread(target=_boot_ble, daemon=True, name="boot-ble").start()
+    else:
+        S.log("自动连接已关闭：启动后需手动点「连接」", "mut")
+
     httpd = QuietServer(("127.0.0.1", port), Handler)
     url = "http://127.0.0.1:%d/" % port
 
@@ -941,6 +990,42 @@ def main():
     print("  配置: %s" % CFG_PATH)
     print("  输出: %s" % S.cfg.get("outdir"))
     print("  按 Ctrl+C 退出")
+
+    if args.tray:
+        from t1_tray import Tray
+
+        def _state():
+            ble = S.ble
+            alive = bool(ble and ble.is_alive())
+            conn = bool(alive and getattr(ble, "connected", False))
+            return {
+                "connected": conn,
+                # 线程在、链路没通 = 启动连接中 / 断链重连中
+                "busy": bool(alive and not conn),
+                "paused": S.pause_actions,
+                "name": S.cfg.get("name") or "",
+            }
+
+        def _quit():
+            try:
+                if S.ble:
+                    S.ble.stop()
+            except Exception:
+                pass
+            try:
+                httpd.shutdown()
+            except Exception:
+                pass
+
+        print("  托盘: 已启用（桌面右下角，左键打开界面）")
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        try:
+            Tray(url, _state, connect_ble, disconnect_ble,
+                 set_pause, _quit, S.log).run()
+        except KeyboardInterrupt:
+            pass
+        finally:
+            os._exit(0)   # BLE 线程是 daemon 但可能卡在等异步，直接退
 
     if not args.no_browser:
         threading.Timer(0.6, lambda: open_window(url)).start()

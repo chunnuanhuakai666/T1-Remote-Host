@@ -183,6 +183,8 @@ CFG_DEFAULT = {
     "mic_extend_ms": 2000,
     "max_segment_s": 30,
     "voice_input": True,
+    # 自动连接：启动就连接，断链后后台一直重试（遥控器休眠唤醒后自动接回）
+    "auto_connect": True,
     # 按键拦截：有映射的键拦下原生功能（需要 Interception 驱动 + 管理员）
     "ic_block": True,
     # 语音识别：默认 SenseVoice（中文专用、非自回归，短句 0.1~0.2s）
@@ -330,6 +332,36 @@ class BleWorker(threading.Thread):
         self.hid_prev_keys = set()
         self.hid_last_sig = None
         self.hid_last_t = 0.0
+        # 自动重连：遥控器空闲会休眠断链，这里常驻重试，用户按键唤醒后自动接回
+        self.retry_n = 0
+        self.wake = threading.Event()   # 手动「立即重连」时打断退避等待
+        self.link_ok = False            # GATT 真的连着（重连途中为 False）
+
+    @property
+    def auto_connect(self):
+        """实时读配置，界面上改开关立刻生效"""
+        return bool(self.cfg.get("auto_connect", True))
+
+    @property
+    def connected(self):
+        """真实链路状态：线程活着但正在重连时也该是 False"""
+        try:
+            return bool(self.client and self.client.is_connected)
+        except Exception:
+            return False
+
+    @property
+    def stopping(self):
+        """已收到退出信号、正在收尾（可能还卡在一次连接超时里）"""
+        return self.stop_flag.is_set()
+
+    def poke(self):
+        """外部催一下：跳过退避等待立刻重试"""
+        self.wake.set()
+
+    def _loud(self):
+        """后台重连时不刷屏：只在头两轮和每十轮打一次详细日志"""
+        return self.retry_n <= 1 or self.retry_n % 10 == 0
 
     # ---- 事件投递
     def emit(self, kind, **kw):
@@ -416,8 +448,13 @@ class BleWorker(threading.Thread):
         except Exception:
             pass
 
-    async def _open(self, addr, label, timeout=12.0):
-        self.log("尝试连接 %s（%s）" % (addr, label))
+    async def _open(self, addr, label, timeout=None):
+        if not timeout:
+            # 首次连接给足时间（遥控器可能刚唤醒、Windows 蓝牙栈在忙）；
+            # 后台重连则快进快出，缩短「按键唤醒 -> 接回」的等待
+            timeout = 12.0 if self.retry_n == 0 else 6.0
+        if self._loud():
+            self.log("尝试连接 %s（%s）" % (addr, label))
         client = BleakClient(addr, timeout=timeout)
         try:
             client._backend._device_info = int(addr.replace(":", ""), 16)
@@ -450,19 +487,22 @@ class BleWorker(threading.Thread):
                 client = await self._open(mac, "配置里的 MAC")
             except Exception as e:
                 errs.append("%s: %s: %s" % (mac, type(e).__name__, e))
-                self.log("MAC 直连失败: %s: %s" % (type(e).__name__, e), "warn")
+                if self._loud():
+                    self.log("MAC 直连失败: %s: %s" % (type(e).__name__, e), "warn")
             tried.add(mac)
 
         if client is None and name:
-            self.log("按名称「%s」查找设备…" % name)
+            if self._loud():
+                self.log("按名称「%s」查找设备…" % name)
             paired = self._paired_devices()
-            if paired:
+            if paired and self._loud():
                 self.log("已配对设备: %s" % ", ".join(
                     "%s(%s)" % (n or "?", m) for n, m in paired))
             hits = [(n, m) for n, m in paired if self._match(n, name)]
 
             # 已配对列表里能找到就直接连，省掉 5s 扫描
-            if not hits:
+            # 后台重连时不做广播扫描：设备睡着不会广播，扫了纯浪费时间
+            if not hits and self.retry_n == 0:
                 scanned = await self._scan_devices()
                 if scanned:
                     self.log("广播中的设备: %s" % ", ".join(
@@ -478,7 +518,8 @@ class BleWorker(threading.Thread):
                     break
                 except Exception as e:
                     errs.append("%s: %s: %s" % (addr, type(e).__name__, e))
-                    self.log("连接 %s 失败: %s" % (addr, e), "warn")
+                    if self._loud():
+                        self.log("连接 %s 失败: %s" % (addr, e), "warn")
 
         if client is None:
             if errs:
@@ -858,30 +899,80 @@ class BleWorker(threading.Thread):
             self.max_since = now + 3600
 
     # ---- 线程主体
+    async def _wait_retry(self):
+        """退避等待，返回 False 表示该收工了（用户点了断开/退出）"""
+        self.retry_n += 1
+        # 刚断链时快试（遥控器可能只是短暂休眠），长时间连不上就放慢到 10 秒：
+        # 真正的唤醒信号来自按键（Raw Input 会 poke 立即重试），不必高频轮询。
+        if self.retry_n <= 8:
+            delay = (2, 2, 3, 3, 4)[min(self.retry_n - 1, 4)]
+        else:
+            delay = 10
+        self.emit("state", value="connecting",
+                  text="重连中…（第 %d 次，%d 秒后重试）" % (self.retry_n, delay))
+        if self.retry_n in (1, 2) or self.retry_n % 20 == 0:
+            self.log("遥控器休眠时连不上属正常，按任意键唤醒后会自动接回；"
+                     "后台每 %d 秒试一次（第 %d 次）" % (delay, self.retry_n), "mut")
+        t0 = time.time()
+        while time.time() - t0 < delay:
+            if self.stop_flag.is_set():
+                return False
+            if self.wake.is_set():
+                self.wake.clear()
+                return True
+            await asyncio.sleep(0.2)
+        return not self.stop_flag.is_set()
+
     async def _amain(self):
-        try:
-            await self._connect()
-        except Exception as e:
-            self.emit("state", value="error", text="连接失败")
-            self.log("连接失败: %s: %s" % (type(e).__name__, e), "err")
-            return
-
-        self.listening = True
-        self.emit("listening", value=True)
-        self.log("进入监听：按遥控器语音键说话即可，自动开麦", "ok")
-
         while not self.stop_flag.is_set():
-            await asyncio.sleep(0.15)
-            if self.client and not self.client.is_connected:
-                self.log("连接已断开", "warn")
+            try:
+                await self._connect()
+            except Exception as e:
+                self.link_ok = False
+                self.emit("state", value="error", text="连接失败")
+                if self._loud():
+                    self.log("连接失败: %s: %s" % (type(e).__name__, e), "err")
+                # 半途失败（连上了但订阅失败之类）要把句柄放掉，不然下一轮抢占不了
+                half, self.client = self.client, None
+                try:
+                    if half:
+                        await half.disconnect()
+                except Exception:
+                    pass
+                if not self.auto_connect:
+                    return
+                if not await self._wait_retry():
+                    break
+                continue
+
+            self.retry_n = 0
+            self.link_ok = True
+            self.listening = True
+            self.emit("listening", value=True)
+            self.log("进入监听：按遥控器语音键说话即可，自动开麦", "ok")
+
+            while not self.stop_flag.is_set():
+                await asyncio.sleep(0.15)
+                if self.client and not self.client.is_connected:
+                    self.log("连接已断开", "warn")
+                    break
+
+            self.listening = False
+            self.link_ok = False
+            self._end_segment("上位机停止" if self.stop_flag.is_set() else "连接断开")
+            old, self.client = self.client, None
+            try:
+                if old:
+                    await old.disconnect()
+            except Exception:
+                pass
+            self.emit("listening", value=False)
+
+            if not self.auto_connect:
+                break
+            if not await self._wait_retry():
                 break
 
-        self.listening = False
-        self._end_segment("上位机停止")
-        try:
-            await self.client.disconnect()
-        except Exception:
-            pass
         self.emit("state", value="idle", text="未连接")
         self.emit("listening", value=False)
 
@@ -890,8 +981,12 @@ class BleWorker(threading.Thread):
             return
         self.stt_thread = threading.Thread(target=self._stt_loop, daemon=True)
         self.stt_thread.start()
-        self.log("语音输入已启用（引擎 %s），按住语音键说完松开即可"
-                 % stt.engine_name(), "ok")
+        eng = stt.engine_name()
+        self.log("语音输入已启用（引擎 %s），按住语音键说完松开即可" % eng, "ok")
+        if eng == "sapi" and stt.HAVE_SHERPA and not stt.have_sensevoice_files():
+            self.log("没找到 SenseVoice 模型，当前退回 Windows 内置听写（识别明显更差）。"
+                     "把 models/sense-voice/（model.int8.onnx + tokens.txt）放到 %s 即可"
+                     % stt.sensevoice_dir(), "warn")
 
     def _stop_stt(self):
         self.stt_thread = None

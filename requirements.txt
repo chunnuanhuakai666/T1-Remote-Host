@@ -5,6 +5,9 @@ numpy>=1.24
 sherpa-onnx>=1.10
 # Windows 内置听写兜底（stt.py 走 SAPI COM）
 pywin32>=306; sys_platform == "win32"
+# 系统托盘：--tray 模式无窗口常驻桌面右下角（pillow 是它的依赖）
+pystray>=0.19
+pillow>=10.0
 
 # 可选备选引擎（不装也能用，stt.py 的 _has_whisper() 会自动跳过）：
 #   pip install "faster-whisper>=1.1"

@@ -28,5 +28,6 @@
       "action": ""
     }
   },
-  "ic_debug": false
+  "ic_debug": false,
+  "auto_connect": true
 }

@@ -134,7 +134,10 @@ function setState(st) {
   EL.devState.textContent = st.text || STATE_TXT[v] || v;
   EL.devChip.classList.toggle('on', v === 'connected');
   EL.devChip.classList.toggle('err', v === 'error');
-  EL.btnConnect.textContent = (v === 'connected' || v === 'connecting') ? '断开' : '连接';
+  EL.devChip.classList.toggle('busy', v === 'connecting');
+  // 连接中/重连中时按钮点一下 = 立刻重试，不是断开
+  EL.btnConnect.textContent = v === 'connected' ? '断开'
+    : (v === 'connecting' ? '重连中…' : '连接');
   EL.btnConnect.classList.toggle('danger', v === 'connected');
   EL.tagState.textContent = v === 'connected' ? '在线' : STATE_TXT[v];
   EL.tagState.classList.toggle('live', v === 'connected');
@@ -855,18 +858,24 @@ $('#btnClearLog').addEventListener('click', async () => {
 EL.btnConnect.addEventListener('click', async () => {
   if (S.connected) {
     await api('/api/disconnect', {});
-    toast('正在断开…', 'warn');
-  } else {
-    const mac = $('[data-cfg=mac]').value.trim();
-    const name = $('[data-cfg=name]').value.trim();
-    // 输入框空着就沿用已保存的地址/名称，别把配置冲成空串
-    // （服务端收到 mac 字段就会覆盖，空串等于「忘掉这台设备」，之后再也连不上）
-    const body = {};
-    if (mac) body.mac = mac;
-    if (name) body.name = name;
-    await api('/api/connect', body);
-    toast(mac ? ('正在连接 ' + mac) : (name ? ('按名称查找 ' + name) : '用已保存的设备重连'), 'info');
+    toast('已断开，自动重连也已停止；再点「连接」恢复', 'warn');
+    return;
   }
+  // 后台正在重连时点按钮 = 不等退避，立刻再试一次
+  if ((S.state && S.state.value) === 'connecting') {
+    await api('/api/connect', {});
+    toast('立即重试…', 'info');
+    return;
+  }
+  const mac = $('[data-cfg=mac]').value.trim();
+  const name = $('[data-cfg=name]').value.trim();
+  // 输入框空着就沿用已保存的地址/名称，别把配置冲成空串
+  // （服务端收到 mac 字段就会覆盖，空串等于「忘掉这台设备」，之后再也连不上）
+  const body = {};
+  if (mac) body.mac = mac;
+  if (name) body.name = name;
+  await api('/api/connect', body);
+  toast(mac ? ('正在连接 ' + mac) : (name ? ('按名称查找 ' + name) : '用已保存的设备重连'), 'info');
 });
 
 $('#btnCaps').addEventListener('click', async () => {
