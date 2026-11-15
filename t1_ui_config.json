@@ -1,7 +1,7 @@
 {
-  "mac": "",
+  "mac": "7D:D4:10:68:3E:EA",
   "name": "T1",
-  "outdir": "recordings",
+  "outdir": "C:\\Users\\moke\\WorkBuddy\\2026-11-10-20-44-17\\recordings",
   "auto_save": true,
   "skip_bytes": 4,
   "hpf_hz": 120.0,
@@ -10,6 +10,14 @@
   "mic_extend_ms": 2000,
   "max_segment_s": 30,
   "voice_input": true,
+  "ic_block": false,
+  "stt_engine": "auto",
+  "stt_model": "small",
+  "stt_lang": "zh",
+  "stt_beam": 5,
+  "stt_vad": true,
+  "stt_threads": 4,
+  "stt_prompt": "以下是普通话的句子，请用简体中文转写，加上标点符号。可能涉及：语音输入、语音识别、遥控器、上位机、录音、配置、按键、喂喂喂。",
   "wave_frames": 320,
   "hid_listen": true,
   "run_key": true,
@@ -18,46 +26,7 @@
     "C:0x0221": {
       "label": "语音键",
       "action": ""
-    },
-    "C:0x0223": {
-      "label": "主页",
-      "action": ""
-    },
-    "C:0x0224": {
-      "label": "返回",
-      "action": ""
-    },
-    "C:0x00E9": {
-      "label": "音量+",
-      "action": ""
-    },
-    "C:0x00EA": {
-      "label": "音量−",
-      "action": ""
-    },
-    "C:0x00E2": {
-      "label": "静音",
-      "action": ""
-    },
-    "K:0x26": {
-      "label": "上 ↑",
-      "action": ""
-    },
-    "K:0x28": {
-      "label": "下 ↓",
-      "action": "key:voldown"
-    },
-    "K:0x25": {
-      "label": "左 ←",
-      "action": ""
-    },
-    "K:0x27": {
-      "label": "右 →",
-      "action": ""
-    },
-    "K:0x0D": {
-      "label": "OK / 确认",
-      "action": ""
     }
-  }
+  },
+  "ic_debug": false
 }

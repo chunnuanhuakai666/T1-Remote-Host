@@ -131,6 +131,37 @@ HID 侧（`0x1812`）共 5 个集合：
 > 键盘/鼠标集合被 Windows `hidclass` 独占，`hidapi` 打不开，所以方向键走的是
 > **Raw Input 旁路**（`t1_gui.py` 里的 `RawInputWatcher`），不占用设备句柄。
 
+### 为什么最终不装拦截驱动
+
+一开始的设想是用内核过滤驱动把按键在进入 Windows 输入队列前截住，实测两条路都走不通：
+
+| 方案 | 结果 |
+|---|---|
+| TitanCSA Interception V2 | 能装（WHQL 签名，签至 2027），但**演示版每次开机仅 1 小时**，到期后双触发回归 |
+| oblitum 原版（LGPL 3.0 非商业免费） | 驱动用 2012 年就已过期的**个人**证书签名（`CN=Francisco Lopes da Silva`），Win11 内核拒绝加载；它还会往键盘/鼠标 `UpperFilters` 插入过滤链，装错会让键鼠起不来 |
+
+真正的答案更简单：**语音功能根本不需要 HID 按键**。
+
+```text
+按下语音键
+  ├─ BLE 控制点 → EV_START_SEARCH → MIC_OPEN → 音频流 → SenseVoice → 键入
+  └─ HID 报文   → Windows 原生处理（实测 0x0221 不触发任何系统行为）
+```
+
+所以最终形态是：
+
+- **语音键**：走 BLE ATVV，与 HID 通道无关，不装任何驱动
+- **其余按键**：不做映射，交给 Windows 原生处理（音量、方向、OK、返回本来就是想要的功能）
+- 结果：**无双触发、无时限、无管理员权限要求**
+
+`ic_keys.py` 仍保留在代码里（`ic_block: true` 可启用），但它依赖的驱动在现代 Windows
+上已不可用，属于历史遗留，默认关闭。
+
+若将来真要把方向键改成翻页之类，正确方向是 **HidHide**（`nefarius/HidHide`，MIT，
+微软 attestation 签名）：按设备 cloak，让 Windows 完全看不到遥控器的 HID 集合，
+同时白名单放行本程序直读 HID report。失败模式安全——只影响遥控器，物理键盘不受影响。
+
+
 ---
 
 ## 六、目录结构
@@ -142,6 +173,7 @@ HID 侧（`0x1812`）共 5 个集合：
 ├─ t1_gui.py                经典版界面，同时被 server 复用后端线程（BleWorker 等）
 ├─ codec.py                 IMA ADPCM 解码 + 高通 + 归一化 + WAV 写出
 ├─ keysynth.py              SendInput 按键/文本/程序合成
+├─ ic_keys.py               Interception 驱动绑定（历史遗留，默认不启用）
 ├─ t1_ui_config.json        两版共用配置（键映射、音频参数、输出目录）
 ├─ requirements.txt
 ├─ web/                     Pro 版前端（原生 JS，无构建）
@@ -181,7 +213,16 @@ HID 侧（`0x1812`）共 5 个集合：
 | `mic_extend_ms` | `MIC_EXTEND` 间隔（默认 2000ms） |
 | `max_segment_s` | 单段最长时长，超时自动切段 |
 | `voice_input` | 松开语音键后把这段语音识别成文字，键入到当前焦点窗口 |
-| `hid_listen` | 是否启用 Raw Input 监听 |
+| `stt_engine` | 识别引擎：`auto`（优先 SenseVoice）/ `sensevoice` / `whisper` / `sapi` |
+| `stt_model` | Whisper 模型：`base` / `small`（推荐）/ `medium`（仅 whisper 引擎用） |
+| `stt_lang` | 识别语种，默认 `zh` |
+| `stt_beam` | Whisper 束搜索宽度，越大越准也越慢（默认 5） |
+| `stt_vad` | Whisper 是否先用 VAD 剪掉静音段，减少幻觉 |
+| `stt_threads` | SenseVoice 解码线程数（默认 4） |
+| `stt_prompt` | Whisper 提示词，引导输出简体中文与标点；对 SenseVoice 无效 |
+| `hid_listen` | 是否启用按键监听 |
+| `ic_block` | 是否尝试加载 Interception 驱动拦截按键（默认 `false`；现代 Windows 上该驱动已不可用） |
+| `ic_debug` | 每个按键记一行 `IC dev=N vk=0x.. 拦下/透传`，排查设备绑定时开 |
 | `run_key` / `run_cmd` | 是否允许 `key:` / `cmd:` 动作执行 |
 | `keymap` | 键映射表，键名格式 `K:0x..`（键盘） / `C:0x....`（Consumer） |
 
@@ -226,6 +267,48 @@ HID 侧（`0x1812`）共 5 个集合：
 方向键走键盘集合，需要 Raw Input 监听生效（`hid_listen: true`）。
 另外监听窗口必须可见 —— message-only 窗口收不到 `RIDEV_INPUTSINK` 事件。
 
+**语音识别不准 / 识别成乱码**
+1. 确认设置页「语音识别 → 识别引擎」不是 `Windows 听写`。系统听写中文准确率极低
+   （同样的音频，SAPI 输出"每天老妈"，SenseVoice 输出"喂喂喂，可以听到吗？"）
+2. 引擎选 `auto` 或 `sensevoice`；只有需要英/日/韩/粤时才切 `whisper`
+3. 日志里出现「识别引擎加载失败，已降级」通常是首次下载模型时没网，
+   连上网重启一次即可
+4. 首次识别会慢一点（要加载模型，SenseVoice 约 4～6 秒），之后每句 0.1～0.2 秒
+
+**语音输入太慢 / 说完要等好几秒**
+这是 Whisper 的结构性开销，不是配置问题：Whisper 每次都要把音频补齐成 **30 秒的
+编码窗口**，12 层 × 1500 帧的编码器无论你说 2 秒还是 10 秒都要完整跑一遍，
+在 Ryzen 5 5600H 上稳定 5～7 秒。
+
+SenseVoice 是**非自回归**模型（CTC 风格，一次前向出全部文本），计算量只和真实音频
+长度成正比。同一批录音实测：
+
+| 音频 | Whisper small（int8） | SenseVoice（int8） |
+|---|---|---|
+| 2.40s「现在的语音输入正常吗？」 | 5.9s ❌ 听成「音输入」 | **0.14s** ✓ |
+| 3.23s「现在的语音输入可以吗？」 | 7.3s ❌ 听成「音输入」 | **0.15s** ✓ |
+| 2.51s「这是一次语音输入的测试」 | 2.5～3.5s（加提示词才对） | **0.13s** ✓ |
+
+也就是说默认引擎既快 30～40 倍，中文准确率还更高。`sensevoice` 不需要提示词，
+自带标点与数字规范化（ITN）。
+
+模型放 `models/sense-voice/`（`model.int8.onnx` 228MB + `tokens.txt`），
+首次使用会自动从镜像下载；也可以手动放置：
+
+```bash
+# 走 HF 镜像（国内直连不通）
+export HF_ENDPOINT=https://hf-mirror.com
+python -c "from huggingface_hub import hf_hub_download as d; \
+  [d('csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17', f, local_dir='models/sense-voice') \
+   for f in ('model.int8.onnx','tokens.txt')]"
+```
+
+**改代码时注意导入顺序**
+`t1_gui.py` 里 `import stt` 必须排在 `from bleak import ...` 之前。
+ctranslate2.dll 若在 bleak 的 WinRT backend 之后加载，初始化模型时会因 TLS 冲突
+直接段错误（exit 3221225477），且不产生任何 Python 异常，极难排查。
+`stt` 的导入会顺带把 ctranslate2 提前载入，顺序反过来就会崩。
+
 **想换遥控器**
 改 `t1_ui_config.json` 的 `mac`，然后删掉 `keymap` 重新抓一遍按键。
 
@@ -235,7 +318,9 @@ HID 侧（`0x1812`）共 5 个集合：
 换电脑时需要：
 
 1. 装 Python 3.8+（建议 3.12），然后 `python -m pip install -r requirements.txt`
-2. 语音输入需要系统装了中文语音识别包（设置 → 时间和语言 → 语音 → 添加语音）
+2. 语音识别默认用本地 SenseVoice（sherpa-onnx，中文专用），首次识别会自动下载模型到
+   `models/`，之后完全离线；不可用时依次退回 faster-whisper、Windows 内置听写
+   （后者准确率明显更低）
 3. 删掉 `.browser_profile/`，它存的是 Edge 用户数据，和本机路径绑定，删了会自动重建
 4. 遥控器在系统蓝牙里重新配对；配置里把 `mac` 留空、`name` 填设备名即可自动查找
 

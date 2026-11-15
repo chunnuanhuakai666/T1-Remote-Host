@@ -40,6 +40,7 @@ sys.path.insert(0, RES_DIR)
 
 import codec  # noqa: E402
 import keysynth  # noqa: E402
+import ic_keys  # noqa: E402
 from t1_gui import (BleWorker, CFG_DEFAULT, CFG_PATH, RawInputWatcher,  # noqa: E402
                     USAGE_NAME, VK_NAME, hx)
 
@@ -97,7 +98,14 @@ class State:
         self.last_key = None
         self.ble = None
         self.hid = None
+        self.ic = None               # Interception 键盘拦截器
+        self.ic_dropped = set()      # 已经被拦下的按下的键（用来配对 key-up）
         self.listening = False
+        self.pause_actions = False   # 配置中暂停动作执行（按键照常记录，但不合成按键）
+        # 同一次按键可能同时来自 Raw Input 和 BLE 报告直读，这里做一次去重
+        self.key_sig = None
+        self.key_sig_t = 0.0
+        self.hid_source = "rawinput"
         self.uptime0 = time.time()
         self.speech = {"active": False, "seg": 0, "dur": 0.0, "frames": 0,
                        "level": 0.0}
@@ -306,6 +314,11 @@ def handle_event(kind, ev):
 
     if kind == "rawkey":
         key_id = ev.get("key_id")
+        # Raw Input 和 BLE 报告直读可能同时上报同一次按下，150ms 内只算一次
+        now = time.time()
+        if key_id and key_id == S.key_sig and now - S.key_sig_t < 0.15:
+            return
+        S.key_sig, S.key_sig_t = key_id, now
         with S.lock:
             S.keycounts[key_id] = S.keycounts.get(key_id, 0) + 1
             S.last_key = {"id": key_id, "hex": ev.get("hex"),
@@ -318,7 +331,21 @@ def handle_event(kind, ev):
         S.broadcast({"t": "rawkey", **S.last_key, "count": cnt})
         act = (S.cfg.get("keymap", {}).get(key_id) or {}).get("action") or ""
         if act:
-            run_action(act, key_id)
+            # extra=interception 说明是驱动拦下后转来的；gatt 是 BLE 直读；
+            # 其余（Raw Input）说明这个键穿过 Windows 才被看到 → 拦截没生效
+            if key_id.startswith("K:") and ev.get("extra") not in ("interception", "gatt"):
+                _mark_ic_lost(key_id)
+            if S.pause_actions:
+                # 配置页里点按键是为了看/改映射，不该真的执行动作
+                S.broadcast({"t": "pause_hit", "id": key_id,
+                             "label": S.last_key.get("label")})
+            else:
+                run_action(act, key_id)
+        return
+
+    if kind == "hidsrc":
+        S.hid_source = ev.get("source") or "rawinput"
+        S.broadcast({"t": "hidsrc", **ev})
         return
 
     if kind == "hidok":
@@ -385,6 +412,7 @@ def connect_ble():
         S.log("已经连接中", "warn")
         return
     S.ble = BleWorker(S.q, S.cfg)
+    S.ble.pause_actions = S.pause_actions   # 沿用当前的暂停状态
     S.ble.start()
 
 
@@ -399,6 +427,67 @@ def start_hid():
         return
     S.hid = RawInputWatcher(S.q, S.cfg.get("mac", ""))
     S.hid.start()
+
+
+def _ic_on_key(vk, down, dev):
+    """Interception 回调：返回 True = 拦下这个键，不让 Windows 看到。
+
+    有映射的键：拦下原生功能，交给 run_action 合成映射的动作 -> 不再双触发。
+    没映射的键：放行，保持遥控器原本的键鼠功能。
+    """
+    key_id = "K:0x%02X" % vk
+    act = (S.cfg.get("keymap", {}).get(key_id) or {}).get("action") or ""
+    if not down:
+        # 按下时被拦掉的键，抬起也要拦掉，否则 Windows 收到孤立的 key-up
+        if vk in S.ic_dropped:
+            S.ic_dropped.discard(vk)
+            return True
+        return False
+    if act:
+        S.ic_dropped.add(vk)
+    if S.cfg.get("ic_debug"):
+        S.log("IC dev=%d vk=0x%02X %s" % (dev, vk, "拦下→执行映射" if act else "透传"),
+              "mut")
+    S.q.put(("rawkey", {"key_id": key_id, "src": "key", "code": vk,
+                        "hex": "", "extra": "interception"}))
+    return bool(act)
+
+
+def _ic_dead():
+    """Interception 停止投递（演示期到期/驱动异常）：如实反映通道状态，别让界面骗人。"""
+    S.hid_source = "rawinput"
+    S.log("按键拦截通道已退出，只剩 Raw Input 监听：映射仍生效，但原功能会同时触发", "err")
+
+
+def _mark_ic_lost(key_id):
+    """有映射的键盘键居然从 Raw Input 上来了，说明 IC 没拦住它。
+
+    这是最可靠的失效证据：被 IC 拦下的键根本到不了 Windows，Raw Input 就看不到；
+    既然看见了，就说明拦截已经不生效（演示期到期 / 驱动异常）。顺便把状态改回来，
+    免得界面还显示 interception 让人误判。
+    """
+    kb = S.ic
+    if not kb or kb.dead:
+        return
+    kb.dead = True
+    S.hid_source = "rawinput"
+    S.log("按键拦截已失效（%s 从 Raw Input 上来了）：映射照常执行，但原功能会一起触发；"
+          "重启 Windows 可恢复演示期" % key_id, "err")
+
+
+def start_ic():
+    """优先用 Interception：能同时读和拦。失败就退回 Raw Input。"""
+    if not S.cfg.get("ic_block", True):
+        return False
+    kb = ic_keys.InterceptionKeyboard(_ic_on_key, match="620A", log=S.log, on_dead=_ic_dead)
+    kb.start()
+    kb.ready.wait(3.0)
+    if not kb.ok:
+        return False
+    S.ic = kb
+    S.hid_source = "interception"
+    S.log("按键走 Interception：有映射的键拦下原生功能，没映射的照常透传", "ok")
+    return True
 
 
 def snapshot():
@@ -425,13 +514,16 @@ def snapshot():
             "caps": S.caps,
             "state": S.state,
             "listening": S.listening,
+            "hid_source": S.hid_source,
             "segments": segs,
             "logs": list(S.logs),
             "rate": S.rate,
             "keycounts": S.keycounts,
             "last_key": S.last_key,
             "speech": S.speech,
-            "hid": bool(S.hid and S.hid.is_alive()),
+            "pause": S.pause_actions,
+            "hid": bool((S.hid and S.hid.is_alive())
+                        or (S.ic and S.ic.is_alive() and S.ic.ok)),
             "uptime": round(time.time() - S.uptime0, 1),
             "outdir": S.cfg.get("outdir"),
             "cfg_path": CFG_PATH,
@@ -743,6 +835,20 @@ class Handler(BaseHTTPRequestHandler):
             start_hid()
             return self._json({"ok": True})
 
+        if p == "/api/pause":
+            on = bool(b.get("on"))
+            if on != S.pause_actions:
+                S.pause_actions = on
+                if S.ble:
+                    try:
+                        S.ble.pause_actions = on
+                    except Exception:
+                        pass
+                S.log("已暂停动作执行（按键仅记录，不合成）" if on
+                      else "已恢复动作执行", "warn" if on else "ok")
+                S.broadcast({"t": "pause", "on": on})
+            return self._json({"ok": True, "pause": S.pause_actions})
+
         if p == "/api/logs/clear":
             with S.lock:
                 S.logs.clear()
@@ -811,7 +917,21 @@ def main():
     threading.Thread(target=pump, daemon=True).start()
 
     if S.cfg.get("hid_listen", True):
-        threading.Thread(target=start_hid, daemon=True).start()
+        def _boot_keys():
+            # 两条通道并行，各管一段：
+            #   Interception -> 键盘集合（方向键/OK），能读能拦，避免和原生功能双触发
+            #   Raw Input    -> Consumer 集合（音量/静音/主页/返回/语音键），
+            #                   Interception 的键盘过滤器看不到这一类
+            # 键盘键两边都可能收到，靠 handle_event 里 150ms 同键去重；
+            # 被拦下的键根本不会进 Windows，所以只会由 Interception 上报一次。
+            ic_ok = start_ic()
+            start_hid()
+            if ic_ok:
+                S.hid_source = "interception+rawinput"
+                S.log("按键通道：Interception(键盘，可拦) + Raw Input(Consumer)", "ok")
+            else:
+                S.log("Interception 不可用，按键只走 Raw Input（映射会与原功能同时触发）", "warn")
+        threading.Thread(target=_boot_keys, daemon=True).start()
 
     httpd = QuietServer(("127.0.0.1", port), Handler)
     url = "http://127.0.0.1:%d/" % port

@@ -185,6 +185,18 @@
           </div>
         </div>
 
+        <div class="pause-bar" id="pauseBar" hidden>
+          <span class="pb-ico">
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none"
+                 stroke="currentColor" stroke-width="2" stroke-linecap="round">
+              <path d="M9 5v14M15 5v14"/>
+            </svg>
+          </span>
+          <span class="pb-txt"><b>动作执行已暂停</b>　配置时按键只记录，不会真的发出按键、打开程序</span>
+          <span class="pb-hit" id="pbHit"></span>
+          <button class="btn ghost sm" id="btnPauseOff">仍要执行</button>
+        </div>
+
         <div class="map-grid">
           <div class="card remote-card">
             <div class="remote-stage">
@@ -417,6 +429,34 @@
               <div class="f-label"><label>启动时开启按键学习</label><span>Raw Input 旁路监听</span></div>
               <button class="switch" data-bool="hid_listen"></button>
             </div>
+          </div>
+
+          <div class="card cfg-card">
+            <div class="card-head"><h2>语音识别</h2></div>
+            <div class="field">
+              <div class="f-label"><label>识别引擎</label><span>默认的 SenseVoice 是中文专用模型，短句 0.1～0.2 秒出结果</span></div>
+              <select class="inp" data-cfg="stt_engine">
+                <option value="auto">自动（优先 SenseVoice）</option>
+                <option value="sensevoice">SenseVoice（中文，最快）</option>
+                <option value="whisper">Whisper（多语种，较慢）</option>
+                <option value="sapi">Windows 听写（兜底）</option>
+              </select>
+            </div>
+            <div class="field">
+              <div class="f-label"><label>Whisper 模型大小</label><span>仅 Whisper 引擎使用；每次都要跑满 30 秒编码窗，所以短句也慢</span></div>
+              <select class="inp" data-cfg="stt_model">
+                <option value="base">base · 最快，准确率低</option>
+                <option value="small">small · 推荐，约 380 MB</option>
+                <option value="medium">medium · 更准，约 1.2 GB</option>
+              </select>
+            </div>
+            <div class="hint-line">引擎切换后需重启上位机生效；模型首次使用会自动下载到 <code>models/</code></div>
+            <div class="field">
+              <div class="f-label"><label>识别提示词</label><span>仅 Whisper 生效：写进常用词能压住同音错字，例如「语音输入」被听成「引输」</span></div>
+              <textarea class="inp area" data-cfg="stt_prompt" rows="3"
+                placeholder="以下是普通话的句子，请用简体中文转写，加上标点符号。可能涉及：语音输入、语音识别、遥控器。"></textarea>
+            </div>
+            <div class="hint-line">改完自动保存，下一次识别即生效；SenseVoice 不需要提示词，它自带标点与数字规范化</div>
           </div>
 
           <div class="card cfg-card">

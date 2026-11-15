@@ -31,6 +31,19 @@ from collections import deque
 from ctypes import wintypes
 from tkinter import filedialog, messagebox, ttk
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+# 注意：stt 必须在 bleak 之前导入。
+# faster-whisper 的 ctranslate2.dll 若在 WinRT backend 之后才加载，
+# 初始化模型时会因 TLS 冲突直接段错误（实测 exit 3221225477）。
+# 提前把 ctranslate2 载入，顺序反了就会崩，别调换位置。
+try:
+    import stt  # noqa: E402
+    HAVE_STT = stt.available()
+except Exception:  # pragma: no cover
+    stt = None
+    HAVE_STT = False
+
 try:
     from bleak import BleakClient, BleakScanner
     HAVE_BLE = True
@@ -49,7 +62,6 @@ try:
 except ImportError:
     HAVE_HID = False
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import codec  # noqa: E402
 
 try:
@@ -58,13 +70,6 @@ try:
 except Exception:  # pragma: no cover
     keysynth = None
     HAVE_KEYSYNTH = False
-
-try:
-    import stt  # noqa: E402
-    HAVE_STT = stt.available()
-except Exception:  # pragma: no cover
-    stt = None
-    HAVE_STT = False
 
 user32 = ctypes.WinDLL("user32", use_last_error=True)
 
@@ -96,6 +101,32 @@ CFG_PATH = os.path.join(BASE_DIR, "t1_ui_config.json")
 TX_UUID = "ab5e0002-5a21-4f05-bc7d-af01f617b664"
 AUDIO_UUID = "ab5e0003-5a21-4f05-bc7d-af01f617b664"
 CTL_UUID = "ab5e0004-5a21-4f05-bc7d-af01f617b664"
+
+# HID over GATT：按键的另一条来源。禁用 Windows 的 HID 子设备之后，
+# 系统不再把遥控器当键鼠，只有我们订阅 0x2A4D 才收得到按键。
+HID_SVC_UUID = "00001812-0000-1000-8000-00805f9b34fb"
+HID_REPORT_UUID = "00002a4d-0000-1000-8000-00805f9b34fb"
+HID_RPT_REF_UUID = "00002908-0000-1000-8000-00805f9b34fb"
+HID_RPT_INPUT = 1
+
+# HID 键盘用法 -> Windows 虚拟键码（我们的键位 id 一直是 VK 体系）
+HID2VK = {
+    0x28: 0x0D, 0x29: 0x1B, 0x2A: 0x08, 0x2B: 0x09, 0x2C: 0x20,
+    0x4F: 0x27, 0x50: 0x25, 0x51: 0x28, 0x52: 0x26,   # ← ↓ → ↑
+    0x49: 0x2D, 0x4A: 0x24, 0x4B: 0x21, 0x4C: 0x22, 0x4D: 0x23, 0x4E: 0x2E,
+    0x35: 0xC0, 0x2D: 0xBD, 0x2E: 0xBB, 0x2F: 0xDB, 0x30: 0xDD,
+    0x31: 0xDC, 0x33: 0xBA, 0x34: 0xDE, 0x36: 0xBC, 0x37: 0xBE, 0x38: 0xBF,
+}
+# 字母 A-Z（用法 0x04..0x1D）与数字 1-9,0（用法 0x1E..0x27）
+for _i in range(26):
+    HID2VK[0x04 + _i] = 0x41 + _i
+for _i in range(9):
+    HID2VK[0x1E + _i] = 0x31 + _i
+HID2VK[0x27] = 0x30
+for _i in range(12):
+    HID2VK[0x3A + _i] = 0x70 + _i                    # F1..F12
+HID2VK.update({0xE0: 0x11, 0xE1: 0x10, 0xE2: 0x12, 0xE3: 0x5B,
+              0xE4: 0x11, 0xE5: 0x10, 0xE6: 0x12, 0xE7: 0x5B})
 
 EV_AUDIO_STOP = 0x00
 EV_AUDIO_START = 0x04
@@ -152,6 +183,16 @@ CFG_DEFAULT = {
     "mic_extend_ms": 2000,
     "max_segment_s": 30,
     "voice_input": True,
+    # 按键拦截：有映射的键拦下原生功能（需要 Interception 驱动 + 管理员）
+    "ic_block": True,
+    # 语音识别：默认 SenseVoice（中文专用、非自回归，短句 0.1~0.2s）
+    "stt_engine": "auto",       # auto / sensevoice / whisper / sapi
+    "stt_model": "small",       # 仅 whisper 用：tiny / base / small / medium
+    "stt_lang": "zh",
+    "stt_beam": 5,
+    "stt_vad": True,
+    "stt_threads": 4,           # 仅 sensevoice 用
+    "stt_prompt": "以下是普通话的句子，请用简体中文转写，加上标点符号。",
     "wave_frames": 320,
     "hid_listen": True,
     "run_key": True,
@@ -283,6 +324,12 @@ class BleWorker(threading.Thread):
         self.stt_q = queue.Queue()
         self.stt_thread = None
         self._stt_warned = False
+        # Pro 版配置页里会置 True：录音照常，但不把识别结果键入到前台窗口
+        self.pause_actions = False
+        # HID over GATT 直读按键
+        self.hid_prev_keys = set()
+        self.hid_last_sig = None
+        self.hid_last_t = 0.0
 
     # ---- 事件投递
     def emit(self, kind, **kw):
@@ -452,6 +499,7 @@ class BleWorker(threading.Thread):
         await client.start_notify(CTL_UUID, self.on_ctl)
         await client.start_notify(AUDIO_UUID, self.on_audio)
         self.log("已订阅 CTL + AUDIO")
+        await self._setup_hid_reports(client)
 
         # 设备身份
         try:
@@ -478,6 +526,99 @@ class BleWorker(threading.Thread):
             pass
 
         await self.cmd_get_caps()
+
+    async def _setup_hid_reports(self, client):
+        """订阅 HID 服务的 Input Report（0x2A4D），直接拿原始按键报文。
+
+        每个 report id 是一条独立的 Report 特征，报告号得从 Report Reference
+        描述符（0x2908）里读。系统 HID 驱动还占着这条通道时会订阅失败，
+        那种情况说明设备节点还没禁用。
+        """
+        try:
+            svcs = [s for s in client.services if str(s.uuid).lower() == HID_SVC_UUID]
+        except Exception as e:
+            self.log("HID 服务枚举失败: %s" % e, "warn")
+            return
+        if not svcs:
+            try:
+                seen = [str(s.uuid)[4:8] for s in client.services]
+            except Exception:
+                seen = []
+            self.log("GATT 里看不到 0x1812（WinRT 对 HID 服务屏蔽，属正常）；"
+                     "按键由 Interception + Raw Input 负责", "info")
+            return
+
+        found = []
+        for svc in svcs:
+            for ch in svc.characteristics:
+                if str(ch.uuid).lower() != HID_REPORT_UUID:
+                    continue
+                rid, rtype = 0, 0
+                try:
+                    for d in ch.descriptors:
+                        if str(d.uuid).lower() == HID_RPT_REF_UUID:
+                            buf = await client.read_gatt_descriptor(d.handle)
+                            if len(buf) >= 2:
+                                rid, rtype = buf[0], buf[1]
+                            break
+                except Exception as e:
+                    self.log("读报告描述符失败: %s" % e, "warn")
+                if rtype != HID_RPT_INPUT:
+                    continue
+                try:
+                    await client.start_notify(ch, self._make_hid_cb(rid))
+                    found.append(rid)
+                except Exception as e:
+                    self.log("订阅报告 0x%02X 失败: %s" % (rid, e), "warn")
+
+        if found:
+            self.log("HID 报告直读已启动：report %s"
+                     % ", ".join("0x%02X" % r for r in found), "ok")
+            self.emit("hidsrc", source="gatt", reports=sorted(found))
+        else:
+            self.log("HID 报告直读没订阅上，按键仍走 Raw Input（系统 HID 驱动占用）", "warn")
+
+    def _make_hid_cb(self, rid):
+        def cb(_sender, data):
+            try:
+                self._on_hid_report(rid, bytes(data))
+            except Exception as e:
+                self.log("HID 报文解析异常: %s" % e, "err")
+        return cb
+
+    def _on_hid_report(self, rid, d):
+        if not d:
+            return
+        if rid == 0x01:
+            # 键盘：byte0 修饰键、byte1 保留、byte2..7 最多 6 个 usage
+            keys = set(b for b in d[2:8] if b)
+            for u in sorted(keys - self.hid_prev_keys):
+                vk = HID2VK.get(u)
+                if vk:
+                    self._push_hid("key", vk, "K:0x%02X" % vk, d[:8])
+                else:
+                    self.log("未映射的键盘用法 0x%02X" % u, "mut")
+            self.hid_prev_keys = keys
+            return
+        if rid == 0x02:
+            usage = d[0] | ((d[1] << 8) if len(d) > 1 else 0)
+            if usage:
+                self._push_hid("consumer", usage, "C:0x%04X" % usage, d[:3])
+            return
+        if rid == 0x03:
+            if d[0]:
+                self._push_hid("key", d[0], "K:0x%02X" % d[0], d[:2])
+            return
+        self.log("厂商报告 0x%02X: %s" % (rid, hx(d[:16])), "mut")
+
+    def _push_hid(self, src, code, key_id, raw):
+        now = time.time()
+        sig = (src, code)
+        if sig == self.hid_last_sig and now - self.hid_last_t < 0.25:
+            return
+        self.hid_last_sig, self.hid_last_t = sig, now
+        self.emit("rawkey", key_id=key_id, src=src, code=code,
+                  hex=hx(raw), extra="gatt")
 
     async def cmd_get_caps(self):
         await self.send("GET_CAPS", [0x0A, 0x01, 0x00, 0x00, 0x03, 0x03])
@@ -580,6 +721,19 @@ class BleWorker(threading.Thread):
             self.log("生成识别音频失败: %s: %s" % (type(e).__name__, e), "warn")
 
     def _stt_loop(self):
+        # 先把模型抓进内存，省得第一句话等几秒
+        if stt is not None and stt.want_engine(self.cfg) in ("sensevoice", "whisper"):
+            hint = ("SenseVoice 模型（约 230MB）"
+                    if stt.want_engine(self.cfg) == "sensevoice"
+                    else "Whisper 模型（首次需下载约 480MB，仅一次）")
+            self.log("正在加载 %s…" % hint, "mut")
+            t0 = time.time()
+            name = stt.preload(self.cfg)
+            st = stt.status()
+            if st.get("ready"):
+                self.log("语音识别引擎就绪：%s（%.1fs）" % (name, time.time() - t0), "ok")
+            else:
+                self.log("识别引擎加载失败，已降级：%s" % st.get("error"), "err")
         while True:
             try:
                 path = self.stt_q.get(timeout=0.5)
@@ -591,7 +745,7 @@ class BleWorker(threading.Thread):
                 return
             t0 = time.time()
             try:
-                text = stt.recognize_wav(path)
+                text = stt.recognize_wav(path, self.cfg)
             except Exception as e:
                 text = ""
                 self.log("语音识别异常: %s: %s" % (type(e).__name__, e), "err")
@@ -602,9 +756,13 @@ class BleWorker(threading.Thread):
                     pass
             cost = time.time() - t0
             if not text:
-                self.log("语音识别：没有识别出内容（%.1fs）" % cost, "warn")
+                self.log("语音识别：没有识别出内容（%s，%.1fs）"
+                         % (stt.engine_name(), cost), "warn")
                 continue
-            self.log("语音识别（%.1fs）: %s" % (cost, text), "ok")
+            self.log("语音识别（%s，%.1fs）: %s" % (stt.engine_name(), cost, text), "ok")
+            if self.pause_actions:
+                self.log("配置中已暂停键入（识别结果不发送）", "warn")
+                continue
             if not HAVE_KEYSYNTH:
                 self.log("keysynth 不可用，无法键入", "err")
                 continue
@@ -732,7 +890,8 @@ class BleWorker(threading.Thread):
             return
         self.stt_thread = threading.Thread(target=self._stt_loop, daemon=True)
         self.stt_thread.start()
-        self.log("语音输入已启用（Windows 内置识别），按住语音键说完松开即可", "ok")
+        self.log("语音输入已启用（引擎 %s），按住语音键说完松开即可"
+                 % stt.engine_name(), "ok")
 
     def _stop_stt(self):
         self.stt_thread = None

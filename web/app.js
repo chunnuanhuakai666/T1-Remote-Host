@@ -23,6 +23,7 @@ const EL = {
   edChan: $('#edChan'), edChips: $('#edChips'), edLabel: $('#edLabel'),
   edAction: $('#edAction'), edParse: $('#edParse'), edPresets: $('#edPresets'),
   edCount: $('#edCount'), extraChips: $('#extraChips'), emptyChips: $('#emptyChips'),
+  pauseBar: $('#pauseBar'), pbHit: $('#pbHit'), btnPauseOff: $('#btnPauseOff'),
   toasts: $('#toasts'),
 };
 
@@ -32,6 +33,7 @@ const S = {
   presets: [], vkName: {}, usageName: {}, cfgPath: '',
   keyFilter: 'all', logFilter: 'all',
   playingId: null, sel: null,
+  page: 'rec', pause: false, pauseManual: false, serverPause: false,
   levels: new Array(140).fill(0),
   level: 0, levelSmooth: 0,
   ripples: [],
@@ -72,13 +74,55 @@ function fmtTime(t0) {
 
 /* ------------------------------------------------------------------ 导航 */
 function goto(page) {
+  S.page = page;
   $$('.nav-btn').forEach((b) => b.classList.toggle('active', b.dataset.page === page));
   $$('.page').forEach((p) => p.classList.toggle('active', p.id === 'page-' + page));
   if (history.replaceState) history.replaceState(null, '', '#' + page);
+  // 离开配置页 → 恢复执行；回到配置页 → 重新暂停并清掉手动放行
+  if (page !== 'cfg') S.pauseManual = false;
+  syncPause();
   // 配置页隐藏时量不到尺寸，切过来之后再建机身侧面
   if (page === 'cfg') setTimeout(buildThickness, 60);
 }
+
+/* 配置页自动暂停动作执行：按键照常记录、照常联动高亮，但不合成按键、不开程序 */
+function paintPause() {
+  if (EL.pauseBar) EL.pauseBar.hidden = !S.pause;
+}
+
+function syncPause() {
+  const want = S.page === 'cfg' && !S.pauseManual;
+  S.pause = want;
+  paintPause();
+  // 只跟「后端真实状态」比：页面重开时本地初值是 false，
+  // 若上一标签页在配置页被关掉，后端还停在暂停，早退就会让按键永远不执行。
+  if (want === S.serverPause) return;
+  S.serverPause = want;
+  api('/api/pause', { on: want }).catch((e) => {
+    S.serverPause = !want; S.pause = !want; paintPause();
+    toast('暂停开关切换失败：' + e.message, 'err');
+  });
+}
+
+function pauseHint(id, label) {
+  if (!EL.pbHit) return;
+  EL.pbHit.textContent = '已拦截 ' + (label || id);
+  EL.pbHit.classList.add('flash');
+  clearTimeout(S.pauseHitT);
+  S.pauseHitT = setTimeout(() => {
+    EL.pbHit.classList.remove('flash');
+    EL.pbHit.textContent = '';
+  }, 1800);
+}
 $$('.nav-btn').forEach((b) => b.addEventListener('click', () => goto(b.dataset.page)));
+
+if (EL.btnPauseOff) {
+  EL.btnPauseOff.addEventListener('click', () => {
+    S.pauseManual = true;
+    syncPause();
+    toast('本次停留在配置页会照常执行动作，切走再回来重新暂停', 'info', 3600);
+  });
+}
 
 /* ------------------------------------------------------------------ 状态 */
 const STATE_TXT = { idle: '未连接', connecting: '连接中', connected: '已连接', error: '连接失败' };
@@ -815,8 +859,13 @@ EL.btnConnect.addEventListener('click', async () => {
   } else {
     const mac = $('[data-cfg=mac]').value.trim();
     const name = $('[data-cfg=name]').value.trim();
-    await api('/api/connect', { mac, name });
-    toast(mac ? ('正在连接 ' + mac) : (name ? ('按名称查找 ' + name) : '还没填地址或名称'), 'info');
+    // 输入框空着就沿用已保存的地址/名称，别把配置冲成空串
+    // （服务端收到 mac 字段就会覆盖，空串等于「忘掉这台设备」，之后再也连不上）
+    const body = {};
+    if (mac) body.mac = mac;
+    if (name) body.name = name;
+    await api('/api/connect', body);
+    toast(mac ? ('正在连接 ' + mac) : (name ? ('按名称查找 ' + name) : '用已保存的设备重连'), 'info');
   }
 });
 
@@ -1074,6 +1123,15 @@ function handle(ev) {
       break;
     }
     case 'log': appendLog(ev); break;
+    case 'pause':
+      S.pause = !!ev.on;
+      S.serverPause = S.pause;
+      if (!S.pause && S.page === 'cfg') S.pauseManual = true;
+      paintPause();
+      break;
+    case 'pause_hit':
+      pauseHint(ev.id, ev.label);
+      break;
     case 'hid':
       EL.hidDot.classList.toggle('on', !!ev.ok);
       EL.hidTxt.textContent = ev.ok ? '监听' : '未监听';
@@ -1096,6 +1154,7 @@ async function boot() {
     S.keycounts = b.keycounts || {}; S.lastKey = b.last_key;
     S.presets = b.presets || []; S.cfgPath = b.cfg_path;
     S.vkName = b.vk_name || {}; S.usageName = b.usage_name || {};
+    S.pause = !!b.pause; S.serverPause = S.pause; paintPause();
 
     setState(b.state || { value: 'idle' });
     renderInfo(); renderCaps(); renderTracks(); renderStats();
@@ -1124,6 +1183,7 @@ async function boot() {
   const qp = new URLSearchParams(location.search);
   const wanted = qp.get('page') || location.hash.replace('#', '');
   if (wanted) goto(wanted);
+  else syncPause();
   const openId = qp.get('open');
   if (openId) setTimeout(() => selectKey(openId), 300);
 }

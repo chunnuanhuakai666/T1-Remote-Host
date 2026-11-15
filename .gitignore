@@ -23,3 +23,33 @@ build/
 dist/
 *.spec
 _build*.log
+
+# ---- 本机专属（不进版本库）----
+.workbuddy/
+.pull/
+*.out
+
+# 逆向阶段的分析素材与测试音频
+spec.pdf
+spec.txt
+real_*.wav
+tone*.wav
+voice_*.wav
+voice_*.adpcm
+voice_test_*.wav
+
+# 本地打包与备份
+*.zip
+
+# Whisper 模型缓存（几百 MB，首次运行自动下载）
+models/
+
+# Interception 驱动安装包（第三方二进制，按 README 自行下载）
+tools/interception/
+
+# 驱动排查过程产物（本机备份，不进版本库）
+tools/oblitum/
+tools/rollback_v2/
+
+# 配置备份
+*.bak_*
