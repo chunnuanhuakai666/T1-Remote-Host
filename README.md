@@ -220,8 +220,11 @@ HID 侧（`0x1812`）共 5 个集合：
 ```
 ├─ 启动上位机Pro.bat        Pro 版启动脚本
 ├─ 启动上位机.bat           经典 tkinter 版启动脚本
+├─ build_exe.bat            打包成 exe（PyInstaller，含踩坑参数说明）
 ├─ t1_server.py             Pro 版后端：HTTP + SSE + BLE 线程 + Raw Input
 ├─ t1_gui.py                经典版界面，同时被 server 复用后端线程（BleWorker 等）
+├─ t1_tray.py               系统托盘图标（pystray，四色状态）
+├─ stt.py                   语音识别：SenseVoice / Whisper / SAPI + 模型自动下载
 ├─ codec.py                 IMA ADPCM 解码 + 高通 + 归一化 + WAV 写出
 ├─ keysynth.py              SendInput 按键/文本/程序合成
 ├─ ic_keys.py               Interception 驱动绑定（历史遗留，默认不启用）
@@ -272,6 +275,7 @@ HID 侧（`0x1812`）共 5 个集合：
 | `stt_beam` | Whisper 束搜索宽度，越大越准也越慢（默认 5） |
 | `stt_vad` | Whisper 是否先用 VAD 剪掉静音段，减少幻觉 |
 | `stt_threads` | SenseVoice 解码线程数（默认 4） |
+| `stt_autodownload` | 缺 SenseVoice 模型时是否自动下载（默认 `true`；关掉则直接用 SAPI，准确率明显更差） |
 | `stt_prompt` | Whisper 提示词，引导输出简体中文与标点；对 SenseVoice 无效 |
 | `hid_listen` | 是否启用按键监听 |
 | `ic_block` | 是否尝试加载 Interception 驱动拦截按键（默认 `false`；现代 Windows 上该驱动已不可用） |
@@ -345,16 +349,27 @@ SenseVoice 是**非自回归**模型（CTC 风格，一次前向出全部文本�
 也就是说默认引擎既快 30～40 倍，中文准确率还更高。`sensevoice` 不需要提示词，
 自带标点与数字规范化（ITN）。
 
-模型放 `models/sense-voice/`（`model.int8.onnx` 228MB + `tokens.txt`），
-首次使用会自动从镜像下载；也可以手动放置：
+模型放 `models/sense-voice/`（`model.int8.onnx` 228MB + `tokens.txt`）。
+**首次启动会自动下载**到该目录，走 `hf-mirror.com`（国内直连 huggingface.co 不通），
+日志里能看到百分比进度；两个文件都是先写 `.part` 再改名，下到一半中断不会留下坏模型。
+
+想换镜像（自建代理或其它加速站点）就设环境变量，`stt.py` 会优先用它：
 
 ```bash
-# 走 HF 镜像（国内直连不通）
-export HF_ENDPOINT=https://hf-mirror.com
-python -c "from huggingface_hub import hf_hub_download as d; \
-  [d('csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17', f, local_dir='models/sense-voice') \
-   for f in ('model.int8.onnx','tokens.txt')]"
+export HF_ENDPOINT=https://your-mirror.example.com
 ```
+
+不想让它联网，把配置项 `stt_autodownload` 设为 `false`，然后手动放文件：
+
+```bash
+# 不需要装 huggingface_hub，curl 就够
+BASE=https://hf-mirror.com/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/main
+mkdir -p models/sense-voice
+curl -L -o models/sense-voice/model.int8.onnx "$BASE/model.int8.onnx"
+curl -L -o models/sense-voice/tokens.txt       "$BASE/tokens.txt"
+```
+
+校验：`model.int8.onnx` 应是 239233841 字节，`tokens.txt` 是 315894 字节。
 
 **改代码时注意导入顺序**
 `t1_gui.py` 里 `import stt` 必须排在 `from bleak import ...` 之前。
@@ -371,11 +386,32 @@ ctranslate2.dll 若在 bleak 的 WinRT backend 之后加载，初始化模型时
 换电脑时需要：
 
 1. 装 Python 3.8+（建议 3.12），然后 `python -m pip install -r requirements.txt`
-2. 语音识别默认用本地 SenseVoice（sherpa-onnx，中文专用），首次识别会自动下载模型到
-   `models/`，之后完全离线；不可用时依次退回 faster-whisper（需另装，见 requirements.txt
-   末尾注释）、Windows 内置听写（后者准确率明显更低）
+2. 语音识别默认用本地 SenseVoice（sherpa-onnx，中文专用），**首次启动自动下载约 229MB
+   模型到 `models/`**（走 hf-mirror，日志有进度），之后完全离线；下载失败会退回
+   faster-whisper（需另装，见 requirements.txt 末尾注释）或 Windows 内置听写（后者准确率
+   明显更低）。`models/` 已加入 `.gitignore`，不要提交进仓库
 3. 删掉 `.browser_profile/`，它存的是 Edge 用户数据，和本机路径绑定，删了会自动重建
 4. 遥控器在系统蓝牙里重新配对；配置里把 `mac` 留空、`name` 填设备名即可自动查找
+
+**想打包成 exe**
+
+仓库里只有源码，构建产物（`dist/`、`*.spec`）都不进版本库。要 exe 就直接跑：
+
+```bat
+build_exe.bat
+```
+
+产物在 `dist\T1RemoteHost\`，整个文件夹是便携的，拷走就能跑。脚本里的 PyInstaller
+参数都是踩坑踩出来的，改之前先看这几条：
+
+| 参数 | 为什么必须这么写 |
+|---|---|
+| `--collect-binaries onnxruntime` | 用 `--collect-all` 会去 import `onnxruntime.quantization`，间接拉起 torch/transformers，构建时子进程访问违例直接崩 |
+| 一串 `winrt.windows.*` hidden-import | bleak 的 WinRT backend 是懒加载的，PyInstaller 静态分析找不到，漏了会运行时报 `No module named winrt.windows.foundation.collections` |
+| `--exclude-module faster_whisper/ctranslate2` | 已改默认用 SenseVoice，排除后包小 60MB |
+| `onedir` 而非 `onefile` | 原生 DLL 太多，onefile 每次启动解压，慢且易失败 |
+
+模型不打进包（229MB），exe 首次运行会自动下载到 `exe同级\models\sense-voice\`。
 
 **Playwright / 无头截图报错**
 `tools/shot.mjs` 用的是原生 CDP，需要能跑 `node`。不用它不影响主程序。

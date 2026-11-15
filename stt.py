@@ -101,6 +101,96 @@ def have_sensevoice_files():
     return _has_sensevoice_files()
 
 
+# ---------------------------------------------------------------- 模型下载
+# SenseVoice 的两个文件共约 229MB，国内直连 huggingface.co 不通，走镜像。
+# 有 HF_ENDPOINT 环境变量时优先用它（用户自建镜像/代理）。
+SV_REPO = "csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17"
+SV_FILES = ("model.int8.onnx", "tokens.txt")
+HF_MIRROR = (os.environ.get("HF_ENDPOINT") or "https://hf-mirror.com").rstrip("/")
+
+_autodl = True          # 缺模型时是否自动下载，set_autodownload() 可关
+_autodl_lock = threading.Lock()
+
+
+def set_autodownload(on):
+    global _autodl
+    _autodl = bool(on)
+
+
+def _http_download(url, dest, on_progress=None, timeout=30):
+    """流式下载到 <dest>.part，完成后原子改名，避免半截文件被当成可用模型。"""
+    import urllib.request
+
+    tmp = dest + ".part"
+    req = urllib.request.Request(url, headers={
+        "User-Agent": "t1-remote-host/1.0",
+        "Accept": "*/*",
+    })
+    t0 = time.time()
+    with urllib.request.urlopen(req, timeout=timeout) as r, open(tmp, "wb") as f:
+        total = int(r.headers.get("Content-Length") or 0)
+        done = 0
+        last = 0.0
+        while True:
+            chunk = r.read(256 * 1024)
+            if not chunk:
+                break
+            f.write(chunk)
+            done += len(chunk)
+            if on_progress and time.time() - last >= 0.5:
+                last = time.time()
+                on_progress(done, total, time.time() - t0)
+    if total and done != total:
+        raise IOError("下载不完整 %d/%d 字节" % (done, total))
+    if done == 0:
+        raise IOError("下载到 0 字节")
+    os.replace(tmp, dest)
+    return done
+
+
+def ensure_sensevoice(log=None):
+    """确保 models/sense-voice 下的两个文件存在，缺了就去镜像拉。"""
+    if _has_sensevoice_files():
+        return True
+    if not _autodl:
+        return False
+    with _autodl_lock:
+        if _has_sensevoice_files():      # 等锁期间别的线程下完了
+            return True
+        os.makedirs(_sv_dir, exist_ok=True)
+        say = log or (lambda m: None)
+        for name in SV_FILES:
+            dest = os.path.join(_sv_dir, name)
+            if os.path.isfile(dest) and os.path.getsize(dest) > 0:
+                continue
+            url = "%s/%s/resolve/main/%s" % (HF_MIRROR, SV_REPO, name)
+            say("正在下载 %s…" % name)
+            buf = {"next": 10}
+
+            def _prog(done, total, sec, _n=name, _b=buf, _say=say):
+                if not total:
+                    return
+                pct = done * 100.0 / total
+                if pct >= _b["next"]:
+                    _b["next"] = int(pct // 10 * 10) + 10
+                    _say("  %s %d%%（%.0f/%.0f MB，%.1f MB/s）" % (
+                        _n, pct, done / 1048576.0, total / 1048576.0,
+                        done / 1048576.0 / max(sec, 0.001)))
+
+            try:
+                _http_download(url, dest, _prog)
+            except Exception as e:
+                say("下载 %s 失败: %s: %s" % (name, type(e).__name__, e))
+                try:
+                    os.remove(dest + ".part")
+                except OSError:
+                    pass
+                return False
+        ok = _has_sensevoice_files()
+        say("模型下载完成：%s" % _sv_dir) if ok else say("模型文件仍不完整")
+        return ok
+
+
 HAVE_WHISPER = _has_whisper()
 HAVE_SHERPA = _has_sherpa()
 HAVE_SENSEVOICE = HAVE_SHERPA and _has_sensevoice_files()
@@ -121,7 +211,8 @@ def _opt(cfg, key):
 
 
 def _sensevoice_ready():
-    return HAVE_SHERPA and _has_sensevoice_files()
+    # 模型文件不在也能用：加载时会自动去镜像下载
+    return HAVE_SHERPA and (_has_sensevoice_files() or _autodl)
 
 
 def want_engine(cfg=None):
@@ -217,11 +308,16 @@ def _load_whisper(name):
     return _model
 
 
-def _load_sensevoice(cfg=None):
-    """加载 SenseVoice（非自回归中文模型）。"""
+def _load_sensevoice(cfg=None, log=None):
+    """加载 SenseVoice（非自回归中文模型）。模型缺失时先下载。"""
     global _sv, _sv_error, _load_cost
     if _sv is not None:
         return _sv
+    # 下载放在锁外面：229MB 要几分钟，别把其它 stt 调用全堵死
+    if not _has_sensevoice_files() and not ensure_sensevoice(log):
+        _sv_error = ("SenseVoice 模型缺失且自动下载失败，"
+                     "可手动把 model.int8.onnx + tokens.txt 放到 %s" % _sv_dir)
+        return None
     with _lock:
         if _sv is not None:
             return _sv
@@ -249,13 +345,16 @@ def _load_sensevoice(cfg=None):
     return _sv
 
 
-def preload(cfg=None):
-    """同步加载模型，返回引擎名。放在后台线程里调用，避免卡界面。"""
+def preload(cfg=None, log=None):
+    """同步加载模型，返回引擎名。放在后台线程里调用，避免卡界面。
+
+    log(msg) 可选，用于把「正在下载模型」这类进度回传给界面。
+    """
     global _engine, _fallback
     e = want_engine(cfg)
     _engine = e
     if e == "sensevoice":
-        _load_sensevoice(cfg)
+        _load_sensevoice(cfg, log)
         if _sv is None:
             # 首选引擎起不来：auto 模式下本次会话降级到 whisper / sapi
             _fallback = True

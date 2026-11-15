@@ -194,6 +194,7 @@ CFG_DEFAULT = {
     "stt_beam": 5,
     "stt_vad": True,
     "stt_threads": 4,           # 仅 sensevoice 用
+    "stt_autodownload": True,   # 缺 SenseVoice 模型时自动从 HF 镜像下载（约 229MB）
     "stt_prompt": "以下是普通话的句子，请用简体中文转写，加上标点符号。",
     "wave_frames": 320,
     "hid_listen": True,
@@ -762,14 +763,20 @@ class BleWorker(threading.Thread):
             self.log("生成识别音频失败: %s: %s" % (type(e).__name__, e), "warn")
 
     def _stt_loop(self):
+        # 缺模型时是否自动下载（大致 229MB，只能走镜像）
+        stt.set_autodownload(bool(self.cfg.get("stt_autodownload", True)))
         # 先把模型抓进内存，省得第一句话等几秒
         if stt is not None and stt.want_engine(self.cfg) in ("sensevoice", "whisper"):
-            hint = ("SenseVoice 模型（约 230MB）"
-                    if stt.want_engine(self.cfg) == "sensevoice"
-                    else "Whisper 模型（首次需下载约 480MB，仅一次）")
-            self.log("正在加载 %s…" % hint, "mut")
+            eng = stt.want_engine(self.cfg)
+            if eng == "sensevoice" and not stt.have_sensevoice_files():
+                self.log("SenseVoice 模型未就绪（约 230MB），正在从镜像下载，"
+                         "只需一次…", "mut")
+            elif eng == "sensevoice":
+                self.log("正在加载 SenseVoice 模型…", "mut")
+            else:
+                self.log("正在加载 Whisper 模型（首次需下载约 480MB，仅一次）…", "mut")
             t0 = time.time()
-            name = stt.preload(self.cfg)
+            name = stt.preload(self.cfg, log=lambda m: self.log(m, "mut"))
             st = stt.status()
             if st.get("ready"):
                 self.log("语音识别引擎就绪：%s（%.1fs）" % (name, time.time() - t0), "ok")
@@ -984,8 +991,8 @@ class BleWorker(threading.Thread):
         eng = stt.engine_name()
         self.log("语音输入已启用（引擎 %s），按住语音键说完松开即可" % eng, "ok")
         if eng == "sapi" and stt.HAVE_SHERPA and not stt.have_sensevoice_files():
-            self.log("没找到 SenseVoice 模型，当前退回 Windows 内置听写（识别明显更差）。"
-                     "把 models/sense-voice/（model.int8.onnx + tokens.txt）放到 %s 即可"
+            self.log("SenseVoice 模型缺失且自动下载未成功，当前退回 Windows 内置听写"
+                     "（识别明显更差）。手动把 model.int8.onnx + tokens.txt 放到 %s 即可"
                      % stt.sensevoice_dir(), "warn")
 
     def _stop_stt(self):
